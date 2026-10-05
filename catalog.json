@@ -1,0 +1,21 @@
+{
+  "abi": 1,
+  "modules": [
+    {
+      "name": "bochs",
+      "pci_vendor": "1234",
+      "pci_device": "1111",
+      "file": "packages/bochs.ndrv",
+      "sha256": "a4a5456858482ce9a98fdc8f6977980da033274aaa6cc4380f6fcd1a2c83a8f6",
+      "native_modesetting": true,
+      "retains_desktop_dimensions": true,
+      "refresh_clock_control": false,
+      "hdmi_audio": false,
+      "hardware_rendering": false
+    }
+  ],
+  "physical_gpu_drivers": {
+    "rx6600": "not implemented",
+    "other_requested_cards": "not implemented"
+  }
+}

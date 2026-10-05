@@ -1,0 +1,10 @@
+{
+  "created_disposable_disk": true,
+  "module_sha256": "a4a5456858482ce9a98fdc8f6977980da033274aaa6cc4380f6fcd1a2c83a8f6",
+  "installation": true,
+  "downloads_during_install": 1,
+  "cached_native_driver_boot_1": true,
+  "cached_native_driver_boot_2": true,
+  "module_persisted_exactly": true,
+  "panic": false
+}

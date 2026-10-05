@@ -1,0 +1,20 @@
+{
+  "good": {
+    "boot": "17/17",
+    "requests": 1,
+    "native_active": true,
+    "panic": false
+  },
+  "corrupt": {
+    "boot": "17/17",
+    "requests": 1,
+    "native_active": false,
+    "panic": false
+  },
+  "unmatched": {
+    "boot": "17/17",
+    "requests": 0,
+    "native_active": false,
+    "panic": false
+  }
+}
