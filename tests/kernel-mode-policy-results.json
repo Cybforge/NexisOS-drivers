@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "cases": 721,
+  "actual_measured_clock_policy": true,
+  "exact_geometry_required": true,
+  "physical_hardware_verified": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_gpu_mode_policy.c": "01e88596c07346a3b4db75672f4c1fd60194f372fbe9d08a4e0c028313826964",
+    "kernel/drivers/gpu/mode_policy.c": "c9c3086b85454219a01e76f06ef4ed2e2eb4ff7a0e05624716e4e20b7eb0bc8f",
+    "tools/gpu-driver/include/nexis_gpu_v2.h": "b49f9fe2b653a44a9929e3fe98212fc7c124312b6a4a15915c38cc24d7e2ccac",
+    "kernel/drivers/gpu/runtime.c": "c96119337c397bdeeb462453dbb4b9c143184a1aa7333653f40d76021825f4c8",
+    "scripts/test_gpu_mode_policy.py": "6863a185ae78df2587dea4f8de4bf8d957087046bd9bc181cac82ce59d0904f2"
+  }
+}

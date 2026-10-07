@@ -82,12 +82,12 @@ static bool validate_driver(void){
 static bool scanout(nexis_gpu_scanout *mode){
     memset(mode,0,sizeof(*mode));
     if(!R.driver.read_mode(R.driver.state,mode) || mode->reserved || !(mode->flags&NEXIS_GPU_SCANOUT_ACTIVE) ||
-       mode->flags&~7u || ((mode->flags&NEXIS_GPU_SCANOUT_AUDIO) && !(mode->flags&NEXIS_GPU_SCANOUT_HDMI)) ||
+       mode->flags&~15u || ((mode->flags&NEXIS_GPU_SCANOUT_AUDIO) && !(mode->flags&NEXIS_GPU_SCANOUT_HDMI)) ||
        mode->framebuffer!=fb_front_base() || mode->pitch!=fb_get_pitch() || mode->format!=(fb_is_rgb()?0u:1u))return false;
     edid_timing t;memcpy(&t,&mode->timing,sizeof(t));
     return t.hactive==fb_get_width() && t.vactive==fb_get_height() && !(t.flags&~3u) &&
-        t.hactive<t.hsync_start && t.hsync_start<t.hsync_end && t.hsync_end<t.htotal && t.htotal<=65536 &&
-        t.vactive<t.vsync_start && t.vsync_start<t.vsync_end && t.vsync_end<t.vtotal && t.vtotal<=65536 &&
+        t.hactive<t.hsync_start && t.hsync_start<t.hsync_end && t.hsync_end<=t.htotal && t.htotal<=65536 &&
+        t.vactive<t.vsync_start && t.vsync_start<t.vsync_end && t.vsync_end<=t.vtotal && t.vtotal<=65536 &&
         t.clock_khz && t.clock_khz<=R.driver.max_pixel_khz && edid_refresh_millihz(&t)>=20000 && edid_refresh_millihz(&t)<=1000000;
 }
 bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32],pci_device_t *device){
@@ -140,7 +140,7 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32
     if(chosen){
         desired=*chosen;
         desired.flags&=3u;nexis_gpu_timing target;memcpy(&target,&desired,sizeof(target));
-        if(!R.driver.set_mode(R.driver.state,&target) || !scanout(&actual) || memcmp(&actual.timing,&target,sizeof(target))){
+        if(!R.driver.set_mode(R.driver.state,&target) || !scanout(&actual) || !nexis_gpu_mode_readback_matches(&actual,&target)){
             kprintf("[GPU] Native mode rejected or hardware readback differs; restoring prior output\n");release(true);return false;
         }
     }else if(!scanout(&actual)){release(true);return false;}

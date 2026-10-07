@@ -26,11 +26,17 @@ typedef struct {
 #define NEXIS_GPU_SCANOUT_ACTIVE 1u
 #define NEXIS_GPU_SCANOUT_HDMI 2u
 #define NEXIS_GPU_SCANOUT_AUDIO 4u
+/* Clock was measured from the running native hardware against calibrated time.
+ * Readback may differ by <=1,000 ppm from the requested nominal pixel clock.
+ * All geometry/polarity fields must still match exactly. A GOP/EDID clock is
+ * not a measured clock. The kernel publishes the actual measured refresh. */
+#define NEXIS_GPU_SCANOUT_CLOCK_MEASURED 8u
 typedef struct {
     nexis_gpu_timing timing;
     uint64_t framebuffer;
     uint32_t pitch,format,flags,reserved;
 } nexis_gpu_scanout;
+bool nexis_gpu_mode_readback_matches(const nexis_gpu_scanout *,const nexis_gpu_timing *);
 typedef struct {
     uint32_t abi,size,width,height,pitch,format;
     uint16_t vendor,device;

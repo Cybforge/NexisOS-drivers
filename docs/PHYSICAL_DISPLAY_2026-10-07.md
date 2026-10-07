@@ -1,6 +1,6 @@
 # Physical display work: 2026-10-07
 
-Build ID: `physical-display-20261007-r2`.
+Build ID: `physical-display-20261007-r3` (intermediate kernel correction).
 
 The requested end state remains five physical GPU display drivers including
 RX6600, the highest supported monitor refresh rate, HDMI sound, and external
@@ -134,6 +134,19 @@ not catalog entries and not contained in the unchanged r2 OS images. Full
 display/memory clock and bandwidth management, actual PHY modeset rollback,
 AZALIA endpoint/HDA coordination, retained module integration, four other card
 backends, catalog/persistence and physical verification remain required.
+
+### r3 kernel readback correction
+
+`physical-display-20261007-r3` includes a corrected retained-mode validation
+policy: native clocks explicitly measured against calibrated time can differ
+by at most 1,000 ppm from nominal requested clocks. Geometry and polarity still
+match exactly; unsupported flags/reserved fields, invalid clocks and fake
+non-measured clock differences are rejected. The compositor receives the
+actual read-back timing, not the nominal requested clock. Valid zero-back-porch
+geometry is no longer rejected merely because sync ends at total.
+The actual policy passed 721 host/UBSan cases. This build still has zero complete
+physical GPU module entries; it is an intermediate correction, not the full
+five-card/max-Hz/HDMI delivery. External components above are not embedded.
 
 1. Connect actual physical card modules to the retained ABI2 loader and catalog.
 2. Implement AMD native display integration using the bounded ATOM executor, DCN302 scanout,
