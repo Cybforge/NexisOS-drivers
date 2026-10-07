@@ -6,7 +6,9 @@
 #include "dcn302_dfs.h"
 #include "atom_memory.h"
 #include "dcn302_dml.h"
+#include "dcn302_hubp.h"
 enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
+enum rx6600_hubp_operation {RX6600_HUBP_PREPARE,RX6600_HUBP_BLANK,RX6600_HUBP_APPLY,RX6600_HUBP_RESTORE,RX6600_HUBP_CANCEL};
 enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING,RX6600_SMU,RX6600_MEMORY,RX6600_BANDWIDTH};
 typedef struct {
     const nexis_gpu_services *services;
@@ -21,12 +23,18 @@ typedef struct {
     dcn302_dfs_transaction dfs_transaction;
     dcn302_dml_workspace dml_workspace;
     dcn302_dml_job dml_job;
+    dcn302_hubp_transaction hubp_transaction;
+    dcn302_dfs_snapshot hubp_clock_target;
+    uint32_t hubp_floor_mhz[4];
     /* Retained native clock operation for the modeset transaction. The module
      * entry/probe does not invoke it; it is not a terminal/Store control. */
     bool (NEXIS_GPU_CALL *clock_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
     bool (NEXIS_GPU_CALL *display_clocks)(void *,const dcn302_dfs_request *,enum rx6600_dfs_operation);
     /* Explicit choice: current clocks or an un-applied prepared DFS target. */
     bool (NEXIS_GPU_CALL *bandwidth_plan)(void *,const nexis_gpu_timing *,bool,dcn302_dml_output *);
+    /* PREPARE calculates and binds the successful DML result to the selected
+     * clocks/floors. Other operations take NULL timing and false. */
+    bool (NEXIS_GPU_CALL *bandwidth_registers)(void *,const nexis_gpu_timing *,bool,enum rx6600_hubp_operation);
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
     uint64_t sampled_us;uint32_t sampled_frame;
@@ -41,7 +49,8 @@ typedef struct {
  * fails explicitly until the PHY/bandwidth/pixel-PLL transaction is implemented. This
  * Pure AMD DCN30 bandwidth/RQ/DLG/TTU math is retained and uses ROM memory
  * geometry, owned SMU floors and current/explicitly prepared DFS clocks. It
- * does not yet program HUBP/HUBBUB/global-sync, prove no native scaler/cursor,
+ * programs native stopped/blanked HUBP RQ/DLG/TTU with verified rollback.
+ * It does not yet program HUBBUB/global-sync, prove no native scaler/cursor,
  * or complete pixel PLL/PHY/audio. This is not a completed card driver and
  * must not enter the download catalog yet. */
 enum rx6600_error rx6600_probe(rx6600_state *,const nexis_gpu_services *);

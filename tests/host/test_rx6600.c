@@ -12,6 +12,7 @@ typedef struct {
     uint8_t rom[2048];uint32_t otg[5][DCN302_REGISTER_COUNT],dig[5][DCN302_HDMI_REGISTER_COUNT],surface[5][DCN302_SURFACE_REGISTER_COUNT],hpd[5];
     uint32_t fb_base,fb_top,fb_offset,period;
     uint32_t dfs_pll,dfs_dentist,dfs_control,dfs_dto[5];
+    uint32_t hubp[5][DCN302_HUBP_REGISTER_COUNT];
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
     uint64_t time;unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
     bool frozen,invalid;
@@ -52,6 +53,7 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
         }
         for(unsigned r=0;r<DCN302_HDMI_REGISTER_COUNT;r++)if(offset==dcn302_hdmi_register_bytes[i][r]){*out=m->dig[i][r];return true;}
         for(unsigned r=0;r<DCN302_SURFACE_REGISTER_COUNT;r++)if(offset==dcn302_surface_register_bytes[i][r]){*out=m->surface[i][r];return true;}
+        for(unsigned r=0;r<DCN302_HUBP_REGISTER_COUNT;r++)if(offset==dcn302_hubp_register_bytes[i][r]){*out=m->hubp[i][r];return true;}
         if(offset==dcn302_hpd_status_bytes[i]){*out=m->hpd[i];return true;}
     }
     if(offset==DCN302_FB_BASE_BYTES){*out=m->fb_base;return true;}if(offset==DCN302_FB_TOP_BYTES){*out=m->fb_top;return true;}
@@ -81,6 +83,16 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
     }
     if(offset==DCN302_DFS_DTO_CTRL_BYTES){m->dfs_control=value;return true;}
     for(unsigned i=0;i<5;i++)if(offset==dcn302_dfs_dto_bytes[i]){m->dfs_dto[i]=value;return true;}
+    for(unsigned i=0;i<5;i++)for(unsigned r=0;r<DCN302_HUBP_REGISTER_COUNT;r++)if(offset==dcn302_hubp_register_bytes[i][r]){
+        CHECK(!(value&(dcn302_hubp_forbidden[r]|dcn302_hubp_readonly[r])));
+        uint32_t current=m->hubp[i][r];
+        for(unsigned sr=0;sr<DCN302_SURFACE_REGISTER_COUNT;sr++)if(offset==dcn302_surface_register_bytes[i][sr])current=m->surface[i][sr];
+        uint32_t next=(current&dcn302_hubp_readonly[r])|value;
+        if(r==DCN302_HUBP_R_DCHUBP_CNTL && (value&0x1001u)==1u)next|=2;
+        m->hubp[i][r]=next;
+        for(unsigned sr=0;sr<DCN302_SURFACE_REGISTER_COUNT;sr++)if(offset==dcn302_surface_register_bytes[i][sr])m->surface[i][sr]=next;
+        return true;
+    }
     m->invalid=true;return false;
 }
 static bool NEXIS_GPU_CALL resource(void *ctx,unsigned bar,nexis_gpu_resource *out){
@@ -108,7 +120,7 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
     m->surface[opp][DCN302_SURFACE_R_OUT_MUX]=mpcc;m->surface[mpcc][DCN302_SURFACE_R_TOP]=hubp;
     m->surface[mpcc][DCN302_SURFACE_R_BOTTOM]=15;m->surface[mpcc][DCN302_SURFACE_R_OPP]=opp;m->surface[mpcc][DCN302_SURFACE_R_MODE]=2;
     uint32_t *h=m->surface[hubp];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_VIEW_SIZE]=SSET(SSET(0,WIDTH,1920),HEIGHT,1080);
-    h[DCN302_SURFACE_R_CLOCK]=DCN302_SURFACE_CLOCK_ENABLE_MASK|DCN302_SURFACE_DISP_ON_MASK|DCN302_SURFACE_DPP_ON_MASK;
+    h[DCN302_SURFACE_R_CLOCK]=0xf00001u;
     h[DCN302_SURFACE_R_CROSSBAR]=SSET(SSET(SSET(0,RED,format?3:2),GREEN,1),BLUE,format?2:3);h[DCN302_SURFACE_R_PITCH]=2047;
     h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x200000;h[DCN302_SURFACE_R_ADDRESS_HIGH]=h[DCN302_SURFACE_R_INUSE_HIGH]=0x80;
     m->fb_base=0x9000;m->fb_top=0x91ff;m->fb_offset=0x8000;
@@ -175,13 +187,14 @@ static void failures(void){
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);m.hpd[1]=0;rx6600_poll(&s);CHECK(!s.ready);cases++;
 }
 typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
-static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address,uintptr_t bandwidth_address){
+static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address,uintptr_t bandwidth_address,uintptr_t hubp_address){
     model m;nexis_gpu_services k;nexis_gpu_instance out;nexis_gpu_scanout mode;
     init(&m,&k,4,0,3,2,1,2,4,1,1);memset(&out,0xa5,sizeof(out));CHECK(entry(&k,&out)==0 && out.abi==2 && out.size==sizeof(out));
     CHECK(out.read_mode && out.set_mode && out.poll && out.shutdown && out.state && out.state_bytes && out.hdmi && out.scdc);
     CHECK(out.read_mode(out.state,&mode) && mode.flags==11 && !(mode.flags&NEXIS_GPU_SCANOUT_AUDIO));
     rx6600_state *native=out.state;uint32_t acknowledged=0;
     if(bandwidth_address)CHECK((uintptr_t)native->bandwidth_plan==bandwidth_address);
+    if(hubp_address)CHECK((uintptr_t)native->bandwidth_registers==hubp_address);
     dcn302_dml_output bandwidth,zero_bandwidth={0};unsigned before=m.smu_triggers;
     memset(&bandwidth,0xff,sizeof(bandwidth));
     CHECK(!native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)) && m.smu_triggers==before && !m.writes);cases++;
@@ -228,25 +241,45 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     native->smu.floor_known[DCN302_SMU_SOCCLK]=true;cases++;
     nexis_gpu_timing bad=mode.timing;bad.hactive++;
     CHECK(!native->bandwidth_plan(native,&bad,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));cases++;
+    CHECK(native->bandwidth_registers(native,&mode.timing,false,RX6600_HUBP_PREPARE) && native->hubp_transaction.prepared && !native->hubp_transaction.dirty && m.writes==completed_writes);cases++;
+    /* No writes until all real pipes are stopped and HUBP is drained. */
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==completed_writes);
+    m.otg[3][DCN302_R_CONTROL]=0;m.surface[1][DCN302_SURFACE_R_HUBP]=2;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==completed_writes);
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_BLANK) && (m.surface[1][DCN302_SURFACE_R_HUBP]&0x1003u)==3u);cases++;
+    unsigned blanked=m.writes;
+    native->smu.floor_mhz[DCN302_SMU_DCEFCLK]=599;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==blanked);
+    native->smu.floor_mhz[DCN302_SMU_DCEFCLK]=600;m.dfs_pll++;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==blanked);m.dfs_pll--;cases++;
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && native->hubp_transaction.applied && native->hubp_transaction.dirty && m.writes>blanked && !m.invalid);cases++;
+    triggers=m.smu_triggers;
+    CHECK(!native->clock_floor(native,DCN302_SMU_DCEFCLK,599,&acknowledged) && m.smu_triggers==triggers);
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_CANCEL));
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_RESTORE) && !native->hubp_transaction.dirty && !native->hubp_transaction.applied && !native->hubp_transaction.poisoned);cases++;
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_CANCEL) && !native->hubp_transaction.prepared);
+    CHECK(!native->bandwidth_registers(native,NULL,false,(enum rx6600_hubp_operation)-1));
+    m.surface[1][DCN302_SURFACE_R_HUBP]=0;m.otg[3][DCN302_R_CONTROL]=control;
+    completed_writes=m.writes;
     m.time+=500000;out.poll(out.state);CHECK(out.read_mode(out.state,&mode) && out.set_mode(out.state,&mode.timing));
     mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);k.size=104;memset(&out,0xa5,sizeof(out));nexis_gpu_instance zero={0};
     CHECK(entry(&k,&out)==RX6600_INPUT && !memcmp(&out,&zero,sizeof(out)) && !m.reads && !m.writes);cases++;
 }
-static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsigned bandwidth_offset){
+static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsigned bandwidth_offset,unsigned hubp_offset){
     FILE *f=fopen(path,"rb");CHECK(f);CHECK(!fseek(f,0,SEEK_END));long length=ftell(f);CHECK(length>64);rewind(f);
     uint8_t *data=malloc((size_t)length);CHECK(data && fread(data,1,(size_t)length,f)==(size_t)length);fclose(f);
     nexis_gpu_image m;CHECK(nexis_gpu_image_parse(data,(size_t)length,0x1002,0x73ff,&m));
-    CHECK(floor_offset<m.text_bytes && dfs_offset<m.text_bytes && bandwidth_offset<m.text_bytes);
+    CHECK(floor_offset<m.text_bytes && dfs_offset<m.text_bytes && bandwidth_offset<m.text_bytes && hubp_offset<m.text_bytes);
     uint8_t *bases[2];
     for(unsigned n=0;n<2;n++){
         bases[n]=VirtualAlloc(NULL,m.memory_bytes,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);uint8_t *base=bases[n];CHECK(base && (!n || base!=bases[0]));memcpy(base,data+64,m.image_bytes);DWORD old;
         unsigned code=(m.text_bytes+4095)&~4095u;CHECK(VirtualProtect(base,code,PAGE_EXECUTE_READ,&old));
         if(code<m.writable_offset)CHECK(VirtualProtect(base+code,m.writable_offset-code,PAGE_READONLY,&old));
-        retained((void *)(base+m.entry),(uintptr_t)(base+floor_offset),(uintptr_t)(base+dfs_offset),(uintptr_t)(base+bandwidth_offset));
+        retained((void *)(base+m.entry),(uintptr_t)(base+floor_offset),(uintptr_t)(base+dfs_offset),(uintptr_t)(base+bandwidth_offset),(uintptr_t)(base+hubp_offset));
     }
     for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==5);normal();failures();retained(driver_init_v2,0,0,0);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10));
+int main(int argc,char **argv){CHECK(argc==6);normal();failures();retained(driver_init_v2,0,0,0,0);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10));
     printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"real_pic_bandwidth_plan_executed\":true,\"atom_memory_topology_integrated\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

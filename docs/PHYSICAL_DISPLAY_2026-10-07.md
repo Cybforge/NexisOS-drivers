@@ -61,15 +61,31 @@ Nested/reentrant computations are rejected. A native SysV jump context replaces
 Clang's Windows-SEH-offset-dependent builtin setjmp: a failed assertion returns
 through the correct frame rather than crashing the sanitizer host process.
 
-Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 239 cases,
-ATOM memory 2,074 cases and complete DML/PIC math 467 cases;
+The retained RX6600 now also contains real native HUBP RQ/DLG/TTU programming:
+42 exact Navi23 register addresses and 70 field mappings are generated from
+the inherited AMD DCN3/DCN2/DCN2.1 routines. Field overflows are rejected before
+writes. The actual DCN3 blank inheritance is checked: NO_OUTSTANDING_REQ is
+drained before blank, bounded to 100ms, and TTU_DISABLE is zero, unlike DCN1.
+Application requires all five OTGs/VTGs stopped and a powered, clocked, blanked
+and drained HUBP. Status/W1C bits are excluded from writes; unrelated RW bits
+are preserved. Posted write failures are tracked before issuance and restored
+in reverse order only after proving the native stopped state again. A failed
+restoration leaves the transaction poisoned and the parent must keep it off.
+The retained callback binds the successful DML plan to its actual current or
+prepared native clocks and owned UCLK/DCF/SOC/PHY floors. Stale clocks/floors
+reject application; dirty HUBP plans prevent lowering their required floors.
+This executes after module entry at two simultaneously allocated PIC bases.
+Readback verifies configuration/shadow fields, not active physical scanout.
+
+Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 254 cases,
+ATOM memory 2,074 cases, complete DML/PIC math 467 cases and HUBP 6,701 cases;
 all pass with warnings treated as errors and the undefined-behavior sanitizer.
-The RX6600 candidate is 184,384 bytes with 405,504-byte retained memory, no imports
+The RX6600 candidate is 192,576 bytes with 417,792-byte retained memory, no imports
 or runtime relocations. The MMIO/firmware responses are modeled, not physical
 hardware evidence. The 1080p 240-Hz timing passes the math test, which does not
 mean NexisOS has physically switched the card to that mode. The pure math
-harness is never installed as a driver. Native HUBP/HUBBUB/DLG/TTU/global-sync
-programming, scaler/cursor proof, pixel PLL/PHY, complete link rollback
+harness is never installed as a driver. Native HUBBUB and retained OTG global-sync
+integration, scaler/cursor proof, pixel PLL/PHY, complete link rollback
 and AZALIA/HDA audio coordination remain required, as do the other four card
 backends. The candidate stays outside the catalog and is not embedded in the
 unchanged r4 ISOs. No new physical-driver ISO has been delivered by this increment.

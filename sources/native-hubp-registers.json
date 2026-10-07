@@ -1,0 +1,15 @@
+{
+  "source": "AMD Linux v6.12",
+  "upstream_sha256": {
+    "dcn302_offset.h": "052c86b51b20d93b99c95b2556fd68b4ecd5ae2388c59a8b2b08a4a00e2ea780",
+    "dcn302_mask.h": "8491525dd88e7ee6fec5f926ee93ee1a2d16953428637325bfd2aaa98c77822b",
+    "dimgrey_cavefish_ip_offset.h": "cd6b042e6ec1e8f71549828fa225182b0bb00c7be6b556ad0d3591d200afedf2",
+    "dcn20_hubp.c": "9671025823f63ba040274f9a2d455463340e26b67233c755f1116a58d97a64d3",
+    "dcn21_hubp.c": "0614c3f5cd1d21e7b67a9c003d0b607fb21d9cf9699c154c0052cd2a5f3c8bcb",
+    "dcn30_hubp.c": "41c5811597a5897a2774e9aa3f939552b400112bbce52b981417c6f06618f297"
+  },
+  "registers": 42,
+  "fields": 70,
+  "blank_inheritance": "hubp3 -> hubp2_set_blank_regs; drain before blank; TTU_DISABLE=0",
+  "generated_sha256": "31e1432525d555c48f9428311a40d76a124357b3fea5530caed6b2cca905b4c3"
+}

@@ -13,6 +13,10 @@ static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock
     if(!out)return false;
     *out=0;rx6600_state *s=context;
     if(!s || !s->ready || s->busy)return false;
+    if(s->hubp_transaction.dirty){
+        const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
+        for(unsigned n=0;n<4;n++)if((unsigned)clock==clocks[n] && mhz<s->hubp_floor_mhz[n])return false;
+    }
     /* Never lower the voltage floor underneath programmed native clocks or
      * the old/new clocks still needed for an outstanding rollback. */
     if(clock==DCN302_SMU_DISPCLK || clock==DCN302_SMU_DPPCLK){
@@ -101,6 +105,50 @@ static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *
 done:
     s->busy=false;return ok;
 }
+static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_timing *timing,bool prepared,enum rx6600_hubp_operation op){
+    rx6600_state *s=context;
+    if(!s || !s->services || s->busy || (unsigned)op>RX6600_HUBP_CANCEL ||
+       (!s->ready && op!=RX6600_HUBP_RESTORE) ||
+       (op==RX6600_HUBP_PREPARE?!timing:(timing!=NULL || prepared)))return false;
+    dcn302_hubp_transaction *t=&s->hubp_transaction;
+    if(op==RX6600_HUBP_CANCEL){
+        if(t->dirty || t->applied || t->poisoned)return false;
+        memset(t,0,sizeof(*t));memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));
+        memset(s->hubp_floor_mhz,0,sizeof(s->hubp_floor_mhz));return true;
+    }
+    if(op==RX6600_HUBP_PREPARE){
+        if(t->dirty || t->applied || t->poisoned)return false;
+        /* Failed recalculation invalidates the prior prepared plan. */
+        memset(t,0,sizeof(*t));
+        dcn302_dml_output output;
+        if(!bandwidth_plan(s,timing,prepared,&output))return false;
+        s->busy=true;
+        enum dcn302_hubp_error e=dcn302_hubp_prepare(&s->io,s->surface.hubp,timing,&output,t);
+        if(!e){
+            s->hubp_clock_target=prepared?s->dfs_transaction.after:s->dfs;
+            const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
+            for(unsigned n=0;n<4;n++)s->hubp_floor_mhz[n]=s->smu.floor_mhz[clocks[n]];
+        }
+        s->busy=false;s->error=e?RX6600_BANDWIDTH:RX6600_OK;return !e;
+    }
+    if(!t->prepared)return false;
+    s->busy=true;
+    if(!resources(s)){fail(s,RX6600_RESOURCE);s->busy=false;return false;}
+    enum dcn302_hubp_error e=DCN302_HUBP_OK;
+    if(op==RX6600_HUBP_BLANK)e=dcn302_hubp_blank(&s->io,t->hubp,now);
+    else if(op==RX6600_HUBP_RESTORE)e=dcn302_hubp_restore_disabled(&s->io,t);
+    else{
+        dcn302_dfs_snapshot current;
+        if(!s->smu.ready || s->smu.busy || s->smu.poisoned || dcn302_dfs_read(&s->io,&current) ||
+           memcmp(&current,&s->hubp_clock_target,sizeof(current)))e=DCN302_HUBP_READBACK;
+        const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
+        for(unsigned n=0;n<4;n++)if(!s->smu.floor_known[clocks[n]] || s->smu.floor_mhz[clocks[n]]<s->hubp_floor_mhz[n])e=DCN302_HUBP_READBACK;
+        if(!e)e=dcn302_hubp_apply_disabled(&s->io,t);
+    }
+    if(t->poisoned || (e && t->dirty))fail(s,RX6600_BANDWIDTH);
+    else s->error=e?RX6600_BANDWIDTH:RX6600_OK;
+    s->busy=false;return !e;
+}
 enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     if(!s)return RX6600_INPUT;
     memset(s,0,sizeof(*s));
@@ -112,7 +160,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;
     if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
        s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||

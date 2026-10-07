@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "cases": 6701,
+  "checks": 3451610,
+  "physical_hardware_tested": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_hubp.c": "ecf951d2dc6a7d816aaf654cc8bc751e78aa6df8aca611ebcaef2ae2304c8d96",
+    "tools/gpu-driver/amd/dcn302_hubp.c": "bed10bc0fb0bc12512ffe013dc23f842e2e525563e05185940da21c5442e7efb",
+    "tools/gpu-driver/amd/dcn302_hubp.h": "f0b47e5b5c5897b70533f1a66f8efa14b15f1f55623e081a1b4783af9b8dbb65",
+    "tools/gpu-driver/amd/dcn302_hubp_regs.h": "31e1432525d555c48f9428311a40d76a124357b3fea5530caed6b2cca905b4c3",
+    "tools/gpu-driver/amd/dcn302_dml.h": "4e58357dd308d7e777e487b2605e7cedd4c5c1590be6d60a07a5eaa50a6bfc7d",
+    "tools/gpu-driver/amd/dcn302_otg.h": "e7ba1172e746f42d38983de191d462ff975a18eb07eecb886ffaa8e053f80148",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_hubp_regs.py": "8106f4ed7d516095ec32644579d42a62948407944e1476cc14dde6eba997cf0c",
+    "scripts/test_dcn302_hubp.py": "2b646a36c3dafe9ae0e609ee4d96adaadf080d6df896bbce9497a46094990f71"
+  }
+}
