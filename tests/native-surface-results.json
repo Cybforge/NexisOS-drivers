@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "cases": 330,
+  "native_surface_mapping_proof": true,
+  "gop_clock_used": false,
+  "hardware_writes": false,
+  "physical_hardware_verified": false,
+  "physical_card_driver": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_surface.c": "61c263017a29008062fd3e88c9e3e5ee3349ada43077e395559dce9ca1fdaadf",
+    "tools/gpu-driver/amd/dcn302_surface.c": "54a2a36deef1f8113419ed91deb73476d3cea286769510b4f41b266860cc3816",
+    "tools/gpu-driver/amd/dcn302_surface.h": "a31360e26f0e19a3509cb3da065f15e8bec6b11c44056dccc49c2a52a5d21d51",
+    "tools/gpu-driver/amd/dcn302_surface_regs.h": "9fd9a940fa5927a52c87254a10bbf707f8938e00da974f579c2df61462218341",
+    "tools/gpu-driver/amd/dcn302_route.h": "047ca7a6da010b0f30f2c169d9da3b63695fa36a58f0066a1d969339c1bc6cdd",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_surface_regs.py": "386d2fd0aebe8782977e7a44e611a8b4187b03fb33fa8d436d71f4c63b41529c",
+    "scripts/test_dcn302_surface.py": "5517ed4d1b85276e97fdfb586da5bbdc6fdcfe7fd6868fc64d16692f9778edc0"
+  }
+}

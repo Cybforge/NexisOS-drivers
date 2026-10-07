@@ -8,7 +8,7 @@
 static unsigned cases;
 typedef struct {
     uint32_t regs[5][DCN302_HDMI_REGISTER_COUNT],before[5][DCN302_HDMI_REGISTER_COUNT];
-    unsigned ops,reads,writes,fail_at,ignored,cs_updates,info_updates;bool posted,dead,invalid;
+    unsigned ops,reads,writes,fail_at,ignored,cs_updates,info_updates,change_at,change_link,change_reg;uint32_t change_value;bool posted,dead,invalid;
 } model;
 static bool locate(model *m,uint32_t offset,unsigned *b,enum dcn302_hdmi_register *r){
     for(unsigned n=0;n<5;n++)for(unsigned i=0;i<DCN302_HDMI_REGISTER_COUNT;i++)if(offset==dcn302_hdmi_register_bytes[n][i]){*b=n;*r=(enum dcn302_hdmi_register)i;return true;}
@@ -17,6 +17,7 @@ static bool locate(model *m,uint32_t offset,unsigned *b,enum dcn302_hdmi_registe
 static bool rd(void *context,uint32_t offset,uint32_t *out){
     model *m=context;unsigned b;enum dcn302_hdmi_register r;m->reads++;
     if(++m->ops==m->fail_at || m->dead || !locate(m,offset,&b,&r))return false;
+    if(m->ops==m->change_at)m->regs[m->change_link][m->change_reg]=m->change_value;
     *out=m->regs[b][r];return true;
 }
 static bool wr(void *context,uint32_t offset,uint32_t value){
@@ -71,32 +72,39 @@ static void expected(model *m,unsigned inst,uint32_t clock,unsigned scdc,bool au
 static void normal(void){
     model m;dcn302_io io;dcn302_hdmi_transaction t;
     unsigned clocks[]={25000,25175,74250,148500,340000,340001,558100,594000,600000};
-    for(unsigned inst=0;inst<5;inst++)for(unsigned i=0;i<sizeof(clocks)/sizeof(*clocks);i++)for(unsigned audio=0;audio<2;audio++){
+    for(unsigned inst=0;inst<5;inst++)for(unsigned link=0;link<5;link++)for(unsigned i=0;i<sizeof(clocks)/sizeof(*clocks);i++)for(unsigned audio=0;audio<2;audio++){
         init(&m,&io,inst);unsigned cfg=clocks[i]>340000?3:0;
-        CHECK(dcn302_hdmi_prepare(&io,inst,clocks[i],cfg,audio,6,&t)==DCN302_HDMI_OK && t.valid && t.prepared && !t.committed);
+        m.regs[link][DCN302_HDMI_R_BE]=SET(m.regs[link][DCN302_HDMI_R_BE],FE_SOURCE,1u<<inst);
+        memcpy(m.before,m.regs,sizeof(m.regs));
+        CHECK(dcn302_hdmi_prepare(&io,inst,link,clocks[i],cfg,audio,6,&t)==DCN302_HDMI_OK && t.valid && t.prepared && !t.committed && t.link==link);
         expected(&m,inst,clocks[i],cfg,audio,6);
         CHECK(dcn302_hdmi_commit(&io,&t)==DCN302_HDMI_CLOCK);
-        m.regs[inst][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
+        m.regs[link][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
         CHECK(dcn302_hdmi_commit(&io,&t)==DCN302_HDMI_OK && t.committed);
         CHECK(!GET(m.regs[inst][DCN302_HDMI_R_GC],AVMUTE) && GET(m.regs[inst][DCN302_HDMI_R_AFMT_PACKET],SAMPLE_SEND)==audio);
         CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_BUSY);
-        m.regs[inst][DCN302_HDMI_R_BE_ENABLE]=0;
+        m.regs[link][DCN302_HDMI_R_BE_ENABLE]=0;
         CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_OK && !t.prepared && !t.committed);restored(&m);cases++;
     }
 }
 static void io_faults(void){
     model m;dcn302_io io;dcn302_hdmi_transaction t;
-    init(&m,&io,2);CHECK(dcn302_hdmi_prepare(&io,2,558100,3,true,0,&t)==DCN302_HDMI_OK);unsigned ops=m.ops;
+    init(&m,&io,2);CHECK(dcn302_hdmi_prepare(&io,2,2,558100,3,true,0,&t)==DCN302_HDMI_OK);unsigned ops=m.ops;
     for(unsigned posted=0;posted<2;posted++)for(unsigned op=1;op<=ops;op++){
         init(&m,&io,2);m.fail_at=op;m.posted=posted;
-        CHECK(dcn302_hdmi_prepare(&io,2,558100,3,true,0,&t)==DCN302_HDMI_IO && !t.prepared && !t.committed);restored(&m);cases++;
+        CHECK(dcn302_hdmi_prepare(&io,2,2,558100,3,true,0,&t)==DCN302_HDMI_IO && !t.prepared && !t.committed);restored(&m);cases++;
+    }
+    for(unsigned posted=0;posted<2;posted++)for(unsigned op=1;op<=ops;op++){
+        init(&m,&io,2);m.regs[4][DCN302_HDMI_R_BE]=SET(m.regs[4][DCN302_HDMI_R_BE],FE_SOURCE,4);
+        memcpy(m.before,m.regs,sizeof(m.regs));m.fail_at=op;m.posted=posted;
+        CHECK(dcn302_hdmi_prepare(&io,2,4,558100,3,true,0,&t)==DCN302_HDMI_IO && !t.prepared && !t.committed);restored(&m);cases++;
     }
     init(&m,&io,0);m.ignored=dcn302_hdmi_register_bytes[0][DCN302_HDMI_R_CONTROL];
-    CHECK(dcn302_hdmi_prepare(&io,0,558100,3,true,0,&t)==DCN302_HDMI_IO);restored(&m);cases++;
-    init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,558100,3,true,0,&t)==DCN302_HDMI_OK);
+    CHECK(dcn302_hdmi_prepare(&io,0,0,558100,3,true,0,&t)==DCN302_HDMI_IO);restored(&m);cases++;
+    init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,0,558100,3,true,0,&t)==DCN302_HDMI_OK);
     m.dead=true;CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_BUSY && t.prepared);cases++;
-    for(unsigned op=1;op<=8;op++){
-        init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,558100,3,true,0,&t)==DCN302_HDMI_OK);
+    for(unsigned op=1;op<=10;op++){
+        init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,0,558100,3,true,0,&t)==DCN302_HDMI_OK);
         m.regs[0][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
         m.fail_at=m.ops+op;m.posted=true;
         CHECK(dcn302_hdmi_commit(&io,&t)==DCN302_HDMI_IO && !t.committed);
@@ -113,8 +121,28 @@ static void invalid(void){
         if(kind==8)m.regs[0][DCN302_HDMI_R_AFMT_POWER]=DCN302_HDMI_POWER_STATE_MASK;
         if(kind==9)m.regs[0][DCN302_HDMI_R_BE]=SET(m.regs[0][DCN302_HDMI_R_BE],FE_SOURCE,2);
         if(kind==10)m.regs[0][DCN302_HDMI_R_FE]=SET(m.regs[0][DCN302_HDMI_R_FE],PIPE,7);
-        CHECK(dcn302_hdmi_prepare(&io,inst,clock,cfg,true,source,&t)!=DCN302_HDMI_OK && !m.writes && !t.valid);cases++;
+        CHECK(dcn302_hdmi_prepare(&io,inst,inst,clock,cfg,true,source,&t)!=DCN302_HDMI_OK && !m.writes && !t.valid);cases++;
     }
-    init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,148500,1,true,0,&t)==DCN302_HDMI_OK);expected(&m,0,148500,1,true,0);cases++;
+    init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,0,148500,1,true,0,&t)==DCN302_HDMI_OK);expected(&m,0,148500,1,true,0);cases++;
+    for(unsigned change=0;change<3;change++){
+        init(&m,&io,0);m.regs[3][DCN302_HDMI_R_BE]=SET(m.regs[3][DCN302_HDMI_R_BE],FE_SOURCE,1);
+        CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)==DCN302_HDMI_OK);
+        m.regs[3][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
+        if(change==0)m.regs[3][DCN302_HDMI_R_BE]=SET(m.regs[3][DCN302_HDMI_R_BE],FE_SOURCE,3);
+        if(change==1)m.regs[3][DCN302_HDMI_R_BE]=SET(m.regs[3][DCN302_HDMI_R_BE],LINK_MODE,0);
+        if(change==2)m.regs[0][DCN302_HDMI_R_FE]=SET(m.regs[0][DCN302_HDMI_R_FE],PIPE,1);
+        unsigned writes=m.writes;CHECK(dcn302_hdmi_commit(&io,&t)==DCN302_HDMI_INPUT && !t.committed && m.writes==writes);
+        CHECK(!GET(m.regs[0][DCN302_HDMI_R_AFMT_PACKET],SAMPLE_SEND) && GET(m.regs[0][DCN302_HDMI_R_GC],AVMUTE));cases++;
+    }
+    for(unsigned change=0;change<5;change++){
+        init(&m,&io,0);m.regs[3][DCN302_HDMI_R_BE]=SET(m.regs[3][DCN302_HDMI_R_BE],FE_SOURCE,1);
+        m.change_at=5;m.change_link=3;
+        if(change==0){m.change_reg=DCN302_HDMI_R_BE;m.change_value=SET(m.regs[3][DCN302_HDMI_R_BE],FE_SOURCE,2);}
+        if(change==1){m.change_reg=DCN302_HDMI_R_BE;m.change_value=SET(m.regs[3][DCN302_HDMI_R_BE],LINK_MODE,0);}
+        if(change==2){m.change_reg=DCN302_HDMI_R_BE_ENABLE;m.change_value=DCN302_HDMI_LINK_ENABLE_MASK;}
+        if(change==3){m.change_link=0;m.change_reg=DCN302_HDMI_R_AUDIO_CLOCK;m.change_value=0;}
+        if(change==4){m.change_link=0;m.change_reg=DCN302_HDMI_R_AFMT_POWER;m.change_value=DCN302_HDMI_POWER_STATE_MASK;}
+        CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)!=DCN302_HDMI_OK && !t.valid && !m.writes);cases++;
+    }
 }
 int main(void){normal();io_faults();invalid();printf("{\"passed\":true,\"cases\":%u,\"native_dcn302_hdmi_packets\":true,\"physical_hdmi_audio_verified\":false,\"full_rx6600_driver_complete\":false}\n",cases);return 0;}

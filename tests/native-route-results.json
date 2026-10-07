@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "cases": 3227,
+  "native_board_pipeline_binding": true,
+  "hardware_writes": false,
+  "physical_card_driver": false,
+  "physical_hardware_verified": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_route.c": "292e032da26bc6ee1d43ba5f040e75a4da7476cebc172a4acf0135cb1a22d00a",
+    "tools/gpu-driver/amd/dcn302_route.c": "9834de414a627436b0f2e2c457cb00e6b65d0a1decc9e6ca38d23d60c2a90290",
+    "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
+    "tools/gpu-driver/amd/dcn302_route.h": "047ca7a6da010b0f30f2c169d9da3b63695fa36a58f0066a1d969339c1bc6cdd",
+    "tools/gpu-driver/amd/dcn302_route_regs.h": "970c94d9f80f644fb91b171c3b296d03ff3466070f1be0e0387daeb2d58a5485",
+    "tools/gpu-driver/amd/atom_board.h": "776f9cc090ab38ae56b460084a1d42d5c5ed65948641bbf7f37fcc97c7edf321",
+    "tools/gpu-driver/amd/dcn302_hdmi_regs.h": "4cca37dbf4c742bab1e048086d6abdda6b506e41a93530c1464cc27c25f43fbb",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_route_regs.py": "a2bc5e1c4f453611809192f650e82c93ef2256f540d0576a0f33941d81cff94f",
+    "scripts/test_dcn302_route.py": "c77ca820936a2129e8515ed24048a87a314ccce318897da7a60e0a5b446ff442"
+  }
+}

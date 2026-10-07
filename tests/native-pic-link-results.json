@@ -5,74 +5,114 @@
   "runtime_relocations": false,
   "native_code_symbols": {
     "dcn302_clock_measure": {
-      "address": 12496,
+      "address": 12464,
       "bytes": 3649
     },
     "dcn302_otg_program_disabled": {
-      "address": 6672,
+      "address": 6640,
       "bytes": 2572
     },
     "dcn302_otg_enable": {
-      "address": 5296,
+      "address": 5264,
       "bytes": 1198
     },
     "dcn302_otg_disable": {
-      "address": 4192,
+      "address": 4160,
       "bytes": 1089
     },
     "dcn302_ddc_transfer": {
-      "address": 16160,
+      "address": 16128,
       "bytes": 2982
     },
     "dcn302_hdmi_prepare": {
-      "address": 21760,
-      "bytes": 1704
+      "address": 21744,
+      "bytes": 1345
     },
     "dcn302_hdmi_commit": {
-      "address": 23616,
-      "bytes": 376
+      "address": 23248,
+      "bytes": 519
     },
     "dcn302_hdmi_restore": {
-      "address": 20848,
-      "bytes": 234
+      "address": 20816,
+      "bytes": 253
     },
     "hdmi_scdc_configure": {
-      "address": 24272,
+      "address": 24048,
       "bytes": 447
     },
     "hdmi_scdc_verify_link": {
-      "address": 24720,
+      "address": 24496,
       "bytes": 323
     },
     "atom_vm_execute": {
-      "address": 27504,
+      "address": 27408,
       "bytes": 290
     },
     "atom_vm_init": {
-      "address": 26560,
+      "address": 26464,
       "bytes": 929
+    },
+    "atom_board_open": {
+      "address": 34864,
+      "bytes": 1220
+    },
+    "atom_display_execute": {
+      "address": 38416,
+      "bytes": 628
+    },
+    "dcn302_route_find": {
+      "address": 39312,
+      "bytes": 4062
+    },
+    "dcn302_surface_bind": {
+      "address": 43376,
+      "bytes": 3271
+    },
+    "atom_hdmi_pixel_parameters": {
+      "address": 37024,
+      "bytes": 289
+    },
+    "atom_hdmi_stream_parameters": {
+      "address": 37328,
+      "bytes": 160
+    },
+    "atom_hdmi_transmitter_parameters": {
+      "address": 37488,
+      "bytes": 527
+    },
+    "atom_hdmi_transmitter_v7_parameters": {
+      "address": 38016,
+      "bytes": 390
+    },
+    "dcn302_route_connected": {
+      "address": 39056,
+      "bytes": 254
     }
   },
   "fixture": {
-    "bytes": 41024,
-    "memory_bytes": 184320,
-    "sha256": "74d5cfb5cf99162165a8dcca23c504612930d351ccef815849bccf254cb27ae9"
+    "bytes": 53312,
+    "memory_bytes": 196608,
+    "sha256": "99d4ad5c8f2dcd2e98fda958ea024938f15c05c4ba9c6069479c3f28dc84f787"
   },
   "distributed": false,
   "physical_card_driver": false,
   "physical_hardware_verified": false,
   "source_sha256": {
-    "tests/host/gpu_native_link_fixture.c": "0f25da4b0d0b73ae75f1ff05819d76632112deca9f4a22af0cb0ca480a1ec1ac",
+    "tests/host/gpu_native_link_fixture.c": "d2b7047698816f42abd119b0a6d246fcedb7554c099a207e12bf3e8628e2deb3",
     "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
     "tools/gpu-driver/amd/dcn302_clock.c": "cdf336a6825fb8b7b3320c02065e07a262fcce1f1677db3bdac4e35bceed1676",
     "tools/gpu-driver/amd/dcn302_ddc.c": "fe79e511411d3731dcbb531103775aa715d624360eccb71f6f054a0238fbf6ea",
-    "tools/gpu-driver/amd/dcn302_hdmi.c": "77cc949ca997bd5635ac684cc868c8ce8ae42c6965846f1607b2ac775d9d9ed8",
+    "tools/gpu-driver/amd/dcn302_hdmi.c": "78b0057c8ca6951f0f707aa2d200b8f4ee2c4ec009ec3099022bd8a9a42318c2",
     "tools/gpu-driver/amd/hdmi_scdc.c": "00989b9bb9c256a3100cff2366b76a884a5a4acb62b437b5240dd41c1957edc4",
     "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
     "tools/gpu-driver/amd/atom_vm.c": "2bddbdd4084c1f7d5bf941b5cff1506cbe996d72f42dd21694aa28f90c38865a",
     "tools/gpu-driver/common/memory.c": "a596316cccd05375498d4c44177f5b6a5a54503a8fb001f43a81804ada96ffdf",
+    "tools/gpu-driver/amd/atom_board.c": "67319d25f3444eddf1927afdb9ca1b47a54a9a1c8dc0fe40217238c02716d605",
+    "tools/gpu-driver/amd/atom_display_commands.c": "591f2a696509fe99b805c0e656b0f1206fbe55a986a7a6a05228da0af0e473b6",
+    "tools/gpu-driver/amd/dcn302_route.c": "9834de414a627436b0f2e2c457cb00e6b65d0a1decc9e6ca38d23d60c2a90290",
+    "tools/gpu-driver/amd/dcn302_surface.c": "54a2a36deef1f8113419ed91deb73476d3cea286769510b4f41b266860cc3816",
     "scripts/build_gpu_module_v2.py": "1d292081413da981a57d27c2b1b5b1ea223b56cbb03ee8ef82f72c007d4ff3e9",
     "tools/gpu-driver/include/string.h": "c1bbca2f03195bf7842eee283c0b6668f7537705d435b77f2926d32138f72424",
-    "scripts/test_gpu_native_link.py": "0b16fa5c2e6808642f29be066740d7faa932901f566988d5e73e97529988d994"
+    "scripts/test_gpu_native_link.py": "e95f9df15722686219302d7ebd9185035bd17e5b148721e0da724d32ae497625"
   }
 }

@@ -10,8 +10,12 @@ and read-only UEFI ROM capture are also included as supporting source.
 The new DCN302 components implement native OTG timing/scanout register control,
 hardware DDC/I2C transactions, SCDC scrambling/link verification, HDMI/AFMT
 packet/audio clock setup and running frame-counter frequency measurement.
+They now also decode ATOM board GPIO/DDC/HPD/UNIPHY wiring, build versioned
+RGB8 HDMI pixel/stream/transmitter commands, bind independently numbered
+stream and physical link encoders, and validate the actual linear HUBP VRAM
+surface against the firmware PCI aperture and Desktop framebuffer.
 They have register-model and freestanding PIC build checks. They are external
-backend components, without a complete RX6600 device/connector/clock/PHY adapter.
+backend components, without a complete RX6600 module/clock/PHY/audio adapter.
 These pieces do not yet initialize RX6600 scanout, set its display/link clocks,
 or establish HDMI transmission. See `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.

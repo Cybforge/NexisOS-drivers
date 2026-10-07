@@ -90,11 +90,50 @@ External backend source added after the r2 image (not loaded by that image):
   fixture rejects activation and is not a physical card module or download.
 
 Model checks passed: OTG 725 cases, native I2C plus SCDC 1,360 cases, HDMI/AFMT
-302 cases, frame-counter clock proof 78 cases, all also under the undefined-
-behavior sanitizer. These 2,465 cases check code and modeled register/protocol
+862 cases, frame-counter clock proof 78 cases, board/command decoding 5,242
+cases, native route binding 3,227 cases and native surface proof 330 cases,
+all also under the undefined-behavior sanitizer. These 11,824 cases check code and modeled register/protocol
 semantics; **they do not verify RX6600 hardware, an active 240 Hz mode, or HDMI
 sound**. The full five-card end state remains open. No new physical card binary
 or pin/catalog entry has been created from this partial backend.
+
+### Native board and active-pipeline components added after r2
+
+- `atom_board.c` decodes bounded DisplayObjectInfo 1.4/1.5, GPIO 2.1 and DCE
+  4.1..4.5 table layouts. GPIO register indices retain all 32 bits. It rejects
+  malformed record extents, duplicate/missing pin identities, invalid shifts,
+  table versions and ambiguous connector identities; output remains empty
+  after failure. Software I2C/external encoders remain explicit, not guessed
+  into supported native paths. The actual RX6600 board ROM has not been run
+  through these parsers on hardware yet.
+- `atom_display_commands.c` builds board-derived COMBOPHY pixel clock 1.7
+  (100-Hz units), stream setup 1.5 (correct RGB8 enum), and transmitter 1.6/1.7
+  (32/60-byte parameter spaces). The command adapter uses the bounded VM and
+  checks the firmware revision. Caller byte-buffer alignment is not assumed.
+  Version1.7 supports legacy HDMI TMDS parameters here, not FRL/HPO startup.
+- `dcn302_route.c` verifies a single active native RGB8 HDMI link, independently
+  numbered FE/link/OTG/OPP/DDC/HPD and exact board GPIO/register correspondence.
+  It rejects multi-monitor ambiguity, split ODM, external converters, missing
+  HPD, unknown routing and observed state changes. Clock remains zero until
+  measured from actual OTG counters; no GOP/EDID clock is substituted.
+- `dcn302_surface.c` follows native MPC -> paired DPP/HUBP, validates linear
+  uncompressed VM0 RGB8888, viewport/pitch/crossbar and actual INUSE address,
+  and independently translates the physical GPU VRAM offset into the verified
+  CPU PCI aperture. It rejects pending-address disagreement, tiling, DCC/TMZ,
+  wrong formats/planes, underflow and bounds/state changes. Its caller still
+  needs the independently verified VRAM BAR resource from the kernel.
+- HDMI packet setup now takes separate stream and physical-link indices. The
+  earlier same-number assumption was incorrect for real independently routed
+  pipelines. Both preparation and commit validate link/FE routing and clocks;
+  configuration errors before writes and changes before unmute are rejected.
+  Fault injection checks rollback for mixed stream/link numbers too.
+
+All these additions are external native support source and have a no-import,
+no-relocation PIC link check. They are **not** a complete loadable RX6600 module,
+not catalog entries and not contained in the unchanged r2 OS images. Full
+display/memory clock and bandwidth management, actual PHY modeset rollback,
+AZALIA endpoint/HDA coordination, retained module integration, four other card
+backends, catalog/persistence and physical verification remain required.
 
 1. Connect actual physical card modules to the retained ABI2 loader and catalog.
 2. Implement AMD native display integration using the bounded ATOM executor, DCN302 scanout,

@@ -50,9 +50,9 @@ static bool set_readback(const dcn302_io *io,unsigned inst,enum dcn302_hdmi_regi
     if(!rd(io,inst,r,&now) || !wr(io,inst,r,(now&~(mask|pulse))|(value&(mask|pulse))) || !rd(io,inst,r,&after))return false;
     return !((after^value)&mask); /* UPDATE strobes can self-clear; never compare/replay them. */
 }
-static bool quiescent(const dcn302_io *io,unsigned inst){
+static bool quiescent(const dcn302_io *io,unsigned inst,unsigned link){
     uint32_t be,clock,power;
-    return rd(io,inst,DCN302_HDMI_R_BE_ENABLE,&be) && !GET(be,LINK_ENABLE) &&
+    return rd(io,link,DCN302_HDMI_R_BE_ENABLE,&be) && !GET(be,LINK_ENABLE) &&
         rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&clock) && GET(clock,CLOCK_ENABLE) && GET(clock,CLOCK_ON) &&
         rd(io,inst,DCN302_HDMI_R_AFMT_POWER,&power) && !GET(power,POWER_STATE);
 }
@@ -71,22 +71,32 @@ static bool restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
     return ok;
 }
 enum dcn302_hdmi_error dcn302_hdmi_restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
-    if(!t || !t->valid || !valid(io,t->instance))return DCN302_HDMI_INPUT;
-    if(!quiescent(io,t->instance))return DCN302_HDMI_BUSY;
+    if(!t || !t->valid || !valid(io,t->instance) || t->link>=5)return DCN302_HDMI_INPUT;
+    if(!quiescent(io,t->instance,t->link))return DCN302_HDMI_BUSY;
     return restore(io,t)?DCN302_HDMI_OK:DCN302_HDMI_ROLLBACK;
 }
-enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uint32_t clock,uint8_t scdc,bool audio,unsigned source,dcn302_hdmi_transaction *t){
+enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,unsigned link,uint32_t clock,uint8_t scdc,bool audio,unsigned source,dcn302_hdmi_transaction *t){
     if(!t)return DCN302_HDMI_INPUT;
     memset(t,0,sizeof(*t));
-    if(!valid(io,inst) || clock<25000 || clock>600000 || source>6 || scdc>3 || (clock>340000?scdc!=3:(scdc&2)!=0))return DCN302_HDMI_INPUT;
-    t->instance=inst;t->audio=audio;
+    if(!valid(io,inst) || link>=5 || clock<25000 || clock>600000 || source>6 || scdc>3 || (clock>340000?scdc!=3:(scdc&2)!=0))return DCN302_HDMI_INPUT;
+    t->instance=inst;t->link=link;t->audio=audio;
     uint32_t be,clock_control,power,enabled;
-    if(!rd(io,inst,DCN302_HDMI_R_BE_ENABLE,&enabled) || !rd(io,inst,DCN302_HDMI_R_BE,&be) ||
+    if(!rd(io,link,DCN302_HDMI_R_BE_ENABLE,&enabled) || !rd(io,link,DCN302_HDMI_R_BE,&be) ||
        !rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&clock_control) || !rd(io,inst,DCN302_HDMI_R_AFMT_POWER,&power))return DCN302_HDMI_IO;
     if(GET(enabled,LINK_ENABLE))return DCN302_HDMI_BUSY;
     if(GET(be,LINK_MODE)!=3 || GET(be,FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
     if(!GET(clock_control,CLOCK_ENABLE) || !GET(clock_control,CLOCK_ON) || GET(power,POWER_STATE))return DCN302_HDMI_CLOCK;
-    for(unsigned n=0;n<DCN302_HDMI_REGISTER_COUNT;n++)if(!rd(io,inst,(enum dcn302_hdmi_register)n,&t->registers[n]))return DCN302_HDMI_IO;
+    for(unsigned n=0;n<DCN302_HDMI_REGISTER_COUNT;n++){
+        unsigned index=(n==DCN302_HDMI_R_BE || n==DCN302_HDMI_R_BE_ENABLE)?link:inst;
+        if(!rd(io,index,(enum dcn302_hdmi_register)n,&t->registers[n]))return DCN302_HDMI_IO;
+    }
+    /* Do not publish a valid snapshot after routing/clock ownership changed
+     * between the initial checks and the saved-register reads. */
+    if(GET(t->registers[DCN302_HDMI_R_BE_ENABLE],LINK_ENABLE))return DCN302_HDMI_BUSY;
+    if(GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=3 ||
+       GET(t->registers[DCN302_HDMI_R_BE],FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
+    if(!GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ENABLE) || !GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ON) ||
+       GET(t->registers[DCN302_HDMI_R_AFMT_POWER],POWER_STATE))return DCN302_HDMI_CLOCK;
     if(GET(t->registers[DCN302_HDMI_R_FE],PIPE)>=5)return DCN302_HDMI_INPUT;
     t->valid=true;uint32_t target[DCN302_HDMI_REGISTER_COUNT];memcpy(target,t->registers,sizeof(target));
     target[DCN302_HDMI_R_FE]=SET(SET(target[DCN302_HDMI_R_FE],RGB_ENCODING,0),COLOR_FORMAT,0);
@@ -119,9 +129,12 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uin
     t->prepared=true;return DCN302_HDMI_OK;
 }
 enum dcn302_hdmi_error dcn302_hdmi_commit(const dcn302_io *io,dcn302_hdmi_transaction *t){
-    if(!t || !t->valid || !t->prepared || !valid(io,t->instance))return DCN302_HDMI_INPUT;
-    uint32_t be,clock;
-    if(!rd(io,t->instance,DCN302_HDMI_R_BE_ENABLE,&be) || !rd(io,t->instance,DCN302_HDMI_R_AUDIO_CLOCK,&clock))return DCN302_HDMI_IO;
+    if(!t || !t->valid || !t->prepared || !valid(io,t->instance) || t->link>=5)return DCN302_HDMI_INPUT;
+    uint32_t be,clock,route,fe;
+    if(!rd(io,t->link,DCN302_HDMI_R_BE,&route) || !rd(io,t->instance,DCN302_HDMI_R_FE,&fe))return DCN302_HDMI_IO;
+    if(GET(route,LINK_MODE)!=3 || GET(route,FE_SOURCE)!=(1u<<t->instance) ||
+       GET(fe,PIPE)!=GET(t->registers[DCN302_HDMI_R_FE],PIPE))return DCN302_HDMI_INPUT;
+    if(!rd(io,t->link,DCN302_HDMI_R_BE_ENABLE,&be) || !rd(io,t->instance,DCN302_HDMI_R_AUDIO_CLOCK,&clock))return DCN302_HDMI_IO;
     if(!GET(be,LINK_ENABLE) || !GET(be,LINK_CLOCK) || !GET(clock,CLOCK_ENABLE) || !GET(clock,CLOCK_ON))return DCN302_HDMI_CLOCK;
     if(!set_readback(io,t->instance,DCN302_HDMI_R_AFMT_PACKET,DCN302_HDMI_SAMPLE_SEND_MASK,0,t->audio?1:0) ||
        !set_readback(io,t->instance,DCN302_HDMI_R_GC,DCN302_HDMI_AVMUTE_MASK,0,0)){
