@@ -12,7 +12,7 @@ typedef struct {
     dcn302_smu *reentry;bool reentered;
     uint32_t messages[1024],parameters[1024];
 } model;
-static bool clock_valid(unsigned clock){return clock==2 || (clock>=8 && clock<=11);}
+static bool clock_valid(unsigned clock){return clock==1 || clock==2 || (clock>=8 && clock<=11);}
 static void complete(model *m){
     CHECK(m->pending);uint32_t out=0;unsigned clock=m->parameter>>16,index=m->parameter&0xff;
     if(m->status==1)switch(m->command){
@@ -58,8 +58,8 @@ static dcn302_io init(model *m){
     return (dcn302_io){m,rd,wr,delay};
 }
 static void normal(void){
-    model m;dcn302_smu s;dcn302_smu_limits limits;unsigned clocks[]={2,8,9,10,11};
-    for(unsigned c=0;c<5;c++)for(unsigned fine=0;fine<2;fine++)for(unsigned latency=0;latency<2;latency++){
+    model m;dcn302_smu s;dcn302_smu_limits limits;unsigned clocks[]={1,2,8,9,10,11};
+    for(unsigned c=0;c<6;c++)for(unsigned fine=0;fine<2;fine++)for(unsigned latency=0;latency<2;latency++){
         dcn302_io io=init(&m);m.latency=latency?70:0;m.features[clocks[c]]=fine?0x80000002:3;
         if(fine)m.frequencies[clocks[c]][1]=2000;
         CHECK(dcn302_smu_open(&s,&io,now) && s.ready && !s.poisoned && s.version==0x3a0100 && m.triggers==4);

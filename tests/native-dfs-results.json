@@ -11,7 +11,7 @@
     "tools/gpu-driver/amd/dcn302_dfs.c": "9e88466cf970ecae9ffcacd9dceb033649fd58dde99fb45bb8e0c4e7783e4357",
     "tools/gpu-driver/amd/dcn302_dfs.h": "b39f4f05b927b7f64a7ed07fde719ab87d5d8f124ac2fb1bd6596aa42eaba763",
     "tools/gpu-driver/amd/dcn302_dfs_regs.h": "e12e8e696966d091764eb5aa292fe08ff3533834bb819f8af58f64962d44a752",
-    "tools/gpu-driver/amd/dcn302_smu.h": "cdc250db28b020920c8637a9d2627b8ba973e30a329eacc2e69fa51faf014429",
+    "tools/gpu-driver/amd/dcn302_smu.h": "eb75f499753b12f74ab54091ffb53f0a8f654f4ce6f5766ccf4954f148699537",
     "tools/gpu-driver/include/nexis_gpu_v2.h": "b10b7d226ec0e6831eca0b6daec63526762761acc88b474c64b8810f62aa8871",
     "scripts/generate_dcn302_dfs_regs.py": "bfdc13d7efe9561de0169f8c588de7ab1a3b1d8e58ebb8f0f98de20fc109e904",
     "scripts/test_dcn302_dfs.py": "f40082e2c8af1c676a6e5d168c2ad992a11bfb37f68fed979d3d717028f4e768"

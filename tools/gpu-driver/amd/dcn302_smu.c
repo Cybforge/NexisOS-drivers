@@ -21,7 +21,7 @@
 #include "dcn302_smu.h"
 #include <string.h>
 enum {MSG_TEST=1,MSG_VERSION=2,MSG_INTERFACE=3,MSG_HEADER=4,MSG_MIN=9,MSG_DPM=11};
-static bool supported(unsigned clock){return clock==2 || (clock>=8 && clock<=11);}
+static bool supported(unsigned clock){return clock==1 || clock==2 || (clock>=8 && clock<=11);}
 static bool error(dcn302_smu *s,enum dcn302_smu_error e,bool poison){s->error=e;s->poisoned|=poison;return false;}
 static bool wait_response(dcn302_smu *s,uint32_t *response){
     uint64_t start=s->time_us(s->io.context),last=start;

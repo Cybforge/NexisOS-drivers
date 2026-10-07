@@ -24,7 +24,9 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
     uint8_t *b=m->rom;b[0]=0x55;b[1]=0xaa;b[2]=4;p16(b+0x18,280);memcpy(b+280,"PCIR",4);
     p16(b+284,0x1002);p16(b+286,0x73ff);p16(b+290,24);p16(b+296,4);b[301]=128;
     p16(b+0x48,1720);p16(b+1720,36);memcpy(b+1724,"ATOM",4);p16(b+1750,80);p16(b+1752,100);
-    p16(b+80,4);p16(b+100,64);b[102]=2;b[103]=1;p16(b+104+12*2,200);p16(b+104+22*2,400);p16(b+104+27*2,1600);
+    p16(b+80,4);p16(b+100,64);b[102]=2;b[103]=1;p16(b+104+12*2,200);p16(b+104+22*2,400);p16(b+104+27*2,1600);p16(b+104+28*2,600);
+    p16(b+600,108);b[602]=2;b[603]=5;b[620]=1;
+    p32(b+624,8192);p32(b+628,255);p16(b+634,84);b[637]=0x70;b[638]=8;b[639]=4;
     p16(b+200,20);b[202]=2;b[203]=1;
     p32(b+204,dcn302_ddc_gpio_bytes[ddc]/4);b[208]=(uint8_t)bit(dcn302_ddc_clk_mask[ddc]);b[209]=1;b[210]=(uint8_t)(0x90+ddc);
     p32(b+212,DCN302_GPIO_HPD_BYTES/4);b[216]=(uint8_t)bit(dcn302_hpd_mask[hpd]);b[217]=b[216];b[218]=5;
@@ -66,8 +68,8 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
         if(m->smu_status==1)switch(value){
             case 1:result=m->smu_argument+1;break;case 2:result=m->smu_version;break;
             case 3:result=m->smu_interface;break;case 4:result=m->smu_header;break;
-            case 11:CHECK(clock==2 || (clock>=8 && clock<=11));result=index==255?m->smu_features:index==0?100:index==1?600:2000;break;
-            case 9:CHECK(clock==2 || (clock>=8 && clock<=11));result=m->smu_argument&0xffff;m->smu_floor=result;m->smu_clock_requests++;break;
+            case 11:CHECK(clock==1 || clock==2 || (clock>=8 && clock<=11));result=index==255?m->smu_features:index==0?100:index==1?600:2000;break;
+            case 9:CHECK(clock==1 || clock==2 || (clock>=8 && clock<=11));result=m->smu_argument&0xffff;m->smu_floor=result;m->smu_clock_requests++;break;
             default:m->invalid=true;return false;
         }
         m->smu_response=m->smu_status;m->smu_argument=result;return true;
@@ -118,7 +120,8 @@ static void normal(void){
     for(unsigned pipe=0;pipe<5;pipe++)for(unsigned link=0;link<5;link++)for(unsigned format=0;format<2;format++){
         init(&m,&k,link,(pipe+2)%5,pipe,(link+1)%5,(pipe+3)%5,(pipe+1)%5,(link+2)%5,(link+4)%5,format);
         CHECK(rx6600_probe(&s,&k)==RX6600_OK && s.ready && !s.busy);
-        CHECK(s.smu.ready && s.smu.clocks[2].valid && s.smu.clocks[8].valid && s.smu.clocks[9].valid && s.smu.clocks[10].valid && s.smu.clocks[11].valid && m.smu_triggers==24 && !m.smu_clock_requests);
+        CHECK(s.smu.ready && s.smu.clocks[1].valid && s.smu.clocks[2].valid && s.smu.clocks[8].valid && s.smu.clocks[9].valid && s.smu.clocks[10].valid && s.smu.clocks[11].valid && m.smu_triggers==28 && !m.smu_clock_requests);
+        CHECK(s.memory.type==0x70 && s.memory.channels==8 && s.memory.channel_bytes==2 && s.memory.memory_mb==8192);
         CHECK(rx6600_read_mode(&s,&out) && out.framebuffer==k.framebuffer && out.pitch==2048 && out.format==format && out.flags==11 && out.timing.pixel_khz>558000);
         CHECK(rx6600_set_mode(&s,&out.timing));nexis_gpu_timing changed=out.timing;changed.pixel_khz=148500;
         CHECK(!rx6600_set_mode(&s,&changed) && s.error==RX6600_MODESET_PENDING && s.ready && !m.writes);
@@ -128,7 +131,7 @@ static void normal(void){
 }
 static void failures(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out,zero={0};
-    for(unsigned fault=0;fault<24;fault++){
+    for(unsigned fault=0;fault<27;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);
         switch(fault){
             case 0:k.size=104;break;case 1:k.vendor=0x10de;break;case 2:k.device=0x73df;break;case 3:k.resource=NULL;break;
@@ -139,7 +142,9 @@ static void failures(void){
             case 14:k.pitch=1919;break;case 15:k.format=2;break;case 16:m.period=2000;break;
             case 17:k.write32=NULL;break;case 18:m.smu_version=0;break;case 19:m.smu_interface=0x3f;break;
             case 20:m.smu_header=2;break;case 21:m.smu_features=0;break;case 22:m.smu_status=0xfe;break;case 23:m.smu_response=0xab;break;
+            case 24:m.rom[638]=0;break;case 25:m.rom[639]=32;break;case 26:m.rom[603]=6;break;
         }
+        if(fault>=24){unsigned sum=0;for(unsigned n=0;n<2047;n++)sum+=m.rom[n];m.rom[2047]=(uint8_t)(0-sum);}
         CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !s.busy && !m.writes);
         memset(&out,0xa5,sizeof(out));CHECK(!rx6600_read_mode(&s,&out) && !memcmp(&out,&zero,sizeof(out)));cases++;
     }
@@ -170,12 +175,16 @@ static void failures(void){
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);m.hpd[1]=0;rx6600_poll(&s);CHECK(!s.ready);cases++;
 }
 typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
-static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address){
+static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address,uintptr_t bandwidth_address){
     model m;nexis_gpu_services k;nexis_gpu_instance out;nexis_gpu_scanout mode;
     init(&m,&k,4,0,3,2,1,2,4,1,1);memset(&out,0xa5,sizeof(out));CHECK(entry(&k,&out)==0 && out.abi==2 && out.size==sizeof(out));
     CHECK(out.read_mode && out.set_mode && out.poll && out.shutdown && out.state && out.state_bytes && out.hdmi && out.scdc);
     CHECK(out.read_mode(out.state,&mode) && mode.flags==11 && !(mode.flags&NEXIS_GPU_SCANOUT_AUDIO));
     rx6600_state *native=out.state;uint32_t acknowledged=0;
+    if(bandwidth_address)CHECK((uintptr_t)native->bandwidth_plan==bandwidth_address);
+    dcn302_dml_output bandwidth,zero_bandwidth={0};unsigned before=m.smu_triggers;
+    memset(&bandwidth,0xff,sizeof(bandwidth));
+    CHECK(!native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)) && m.smu_triggers==before && !m.writes);cases++;
     CHECK(!native->smu.floor_known[2] && !m.smu_clock_requests);
     if(floor_address)CHECK((uintptr_t)native->clock_floor==floor_address);
     bool floor_ok=floor_address?((pic_floor)floor_address)(native,DCN302_SMU_UCLK,558,&acknowledged):native->clock_floor(native,DCN302_SMU_UCLK,558,&acknowledged);
@@ -196,25 +205,48 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     CHECK(native->display_clocks(native,NULL,RX6600_DFS_RESTORE) && !native->dfs_transaction.dirty && native->dfs.disp_khz==608333 && native->dfs.dpp_khz==608333);
     CHECK(!native->display_clocks(native,NULL,(enum rx6600_dfs_operation)-1));m.otg[3][DCN302_R_CONTROL]=control;
     unsigned completed_writes=m.writes;CHECK(completed_writes && m.smu_clock_requests==3 && native->ready && !native->busy);cases++;
+    CHECK(native->clock_floor(native,DCN302_SMU_SOCCLK,600,&acknowledged));
+    CHECK(native->clock_floor(native,DCN302_SMU_DCEFCLK,600,&acknowledged));
+    CHECK(native->clock_floor(native,DCN302_SMU_PHYCLK,600,&acknowledged));
+    before=m.smu_triggers;
+    CHECK(native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && bandwidth.disp_khz>=mode.timing.pixel_khz && bandwidth.urgent_ns>=4000);
+    CHECK(native->dml_job.input.channels==8 && native->dml_job.input.channel_bytes==2 && native->dml_job.input.dram_mts==8928 && native->dml_job.input.ref_khz==27000);
+    CHECK(native->dml_job.input.pipe==3 && native->dml_job.input.dpp_khz==native->dfs.pipe_khz[1]);
+    CHECK(m.smu_triggers==before && m.writes==completed_writes && native->ready && !native->busy);cases++;
+    /* The old prepared target retains a smaller DPP DTO after restoration.
+     * A current-clock plan must not silently use it. Explicit target input
+     * must be selected independently, without ever writing registers. */
+    bool target_ok=native->bandwidth_plan(native,&mode.timing,true,&bandwidth);
+    CHECK(native->dml_job.input.dpp_khz==native->dfs_transaction.after.pipe_khz[1]);
+    CHECK(target_ok || !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));
+    CHECK(m.smu_triggers==before && m.writes==completed_writes);cases++;
+    CHECK(native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && native->dml_job.input.dpp_khz==native->dfs.pipe_khz[1]);cases++;
+    native->busy=true;CHECK(!native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));native->busy=false;cases++;
+    native->dfs_transaction.dirty=true;CHECK(!native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));native->dfs_transaction.dirty=false;cases++;
+    native->smu.floor_known[DCN302_SMU_SOCCLK]=false;
+    CHECK(!native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)) && native->ready);
+    native->smu.floor_known[DCN302_SMU_SOCCLK]=true;cases++;
+    nexis_gpu_timing bad=mode.timing;bad.hactive++;
+    CHECK(!native->bandwidth_plan(native,&bad,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));cases++;
     m.time+=500000;out.poll(out.state);CHECK(out.read_mode(out.state,&mode) && out.set_mode(out.state,&mode.timing));
     mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);k.size=104;memset(&out,0xa5,sizeof(out));nexis_gpu_instance zero={0};
     CHECK(entry(&k,&out)==RX6600_INPUT && !memcmp(&out,&zero,sizeof(out)) && !m.reads && !m.writes);cases++;
 }
-static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset){
+static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsigned bandwidth_offset){
     FILE *f=fopen(path,"rb");CHECK(f);CHECK(!fseek(f,0,SEEK_END));long length=ftell(f);CHECK(length>64);rewind(f);
     uint8_t *data=malloc((size_t)length);CHECK(data && fread(data,1,(size_t)length,f)==(size_t)length);fclose(f);
     nexis_gpu_image m;CHECK(nexis_gpu_image_parse(data,(size_t)length,0x1002,0x73ff,&m));
-    CHECK(floor_offset<m.text_bytes && dfs_offset<m.text_bytes);
+    CHECK(floor_offset<m.text_bytes && dfs_offset<m.text_bytes && bandwidth_offset<m.text_bytes);
     uint8_t *bases[2];
     for(unsigned n=0;n<2;n++){
         bases[n]=VirtualAlloc(NULL,m.memory_bytes,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);uint8_t *base=bases[n];CHECK(base && (!n || base!=bases[0]));memcpy(base,data+64,m.image_bytes);DWORD old;
         unsigned code=(m.text_bytes+4095)&~4095u;CHECK(VirtualProtect(base,code,PAGE_EXECUTE_READ,&old));
         if(code<m.writable_offset)CHECK(VirtualProtect(base+code,m.writable_offset-code,PAGE_READONLY,&old));
-        retained((void *)(base+m.entry),(uintptr_t)(base+floor_offset),(uintptr_t)(base+dfs_offset));
+        retained((void *)(base+m.entry),(uintptr_t)(base+floor_offset),(uintptr_t)(base+dfs_offset),(uintptr_t)(base+bandwidth_offset));
     }
     for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==4);normal();failures();retained(driver_init_v2,0,0);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10));
-    printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}
+int main(int argc,char **argv){CHECK(argc==5);normal();failures();retained(driver_init_v2,0,0,0);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10));
+    printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"real_pic_bandwidth_plan_executed\":true,\"atom_memory_topology_integrated\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

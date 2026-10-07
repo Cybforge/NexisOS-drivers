@@ -10,7 +10,7 @@ implemented or verified.** Bochs/QEMU support does not count as a physical drive
 ## Latest external native code after r4
 
 The latest RX6600 candidate adds native DAL SMU mailbox initialization,
-protocol/version checks and actual supported UCLK/DCEFCLK/DISPCLK/DPPCLK/PHYCLK
+protocol/version checks and actual supported SOCCLK/UCLK/DCEFCLK/DISPCLK/DPPCLK/PHYCLK
 levels. It can send native acknowledged hard-minimum clock requests; these
 acknowledgments are not measured scanout frequencies. Pending/uncertain requests
 are quarantined instead of reset or blindly replayed. Probe makes firmware
@@ -34,11 +34,42 @@ distinct actual addresses, then execute native SMU floors and display-clock
 apply/restore after module entry returns. These are development operations,
 not Store commands. The normal set_mode still rejects a changed video mode.
 
-Current checks: SMU 194 cases, DFS/DTO 1,410 cases, retained RX6600 212 cases;
+The retained RX6600 code now reads GDDR6 geometry/capacity/channel masks from
+VRAM_INFO 2.3/2.4/2.5. All advertised modules must agree; truncated modules,
+unbounded shifts, unsupported formats and ambiguous geometry are rejected.
+No fixed assumed RX6600 memory width or firmware default clock is used.
+
+The complete AMD DCN30 VBA and RQ/DLG math engine is imported reproducibly
+from checksum-pinned Linux v6.12 MIT sources, retaining notices and algorithm.
+Platform adaptations replace only includes/logging/assertion transport and two
+undefined type-punning expressions with defined bit copies. The DCN3.02 ASIC
+template omits upstream placeholder clocks/states, min DCFCLK and VCO.
+
+The single linear RGB8 adapter rejects unbounded inputs and overlapping job/
+workspace memory, performs mode-support validation, and calculates required
+DISP/DPP clocks, watermarks, VSTARTUP/update/ready and RQ/DLG/TTU fields. RQ/DLG
+uses the supplied effective clocks, never silently treats the calculated
+minimum as a programmed DFS setting. The retained callback selects current
+versus explicitly prepared clocks and uses board geometry, owned acknowledged
+UCLK/DCF/SOC/PHY floors, GDDR6 UCLK*16 MT/s and the actual PLL multiplier. AMD's
+DCN302 bounding-box fabric frequency follows DCFCLK; it is not a measured FCLK.
+The normal framebuffer dimensions remain required. Math makes no MMIO writes.
+
+An assembly entry saves x87/XMM0..15/MXCSR before any C prologue, uses masked
+nearest-even FP mode and restores exact state on successful or rejected math.
+Nested/reentrant computations are rejected. A native SysV jump context replaces
+Clang's Windows-SEH-offset-dependent builtin setjmp: a failed assertion returns
+through the correct frame rather than crashing the sanitizer host process.
+
+Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 239 cases,
+ATOM memory 2,074 cases and complete DML/PIC math 467 cases;
 all pass with warnings treated as errors and the undefined-behavior sanitizer.
-The RX6600 candidate is 45,120 bytes with 49,152-byte retained memory, no imports
+The RX6600 candidate is 184,384 bytes with 405,504-byte retained memory, no imports
 or runtime relocations. The MMIO/firmware responses are modeled, not physical
-hardware evidence. Full bandwidth/DLG/TTU, pixel PLL/PHY, complete link rollback
+hardware evidence. The 1080p 240-Hz timing passes the math test, which does not
+mean NexisOS has physically switched the card to that mode. The pure math
+harness is never installed as a driver. Native HUBP/HUBBUB/DLG/TTU/global-sync
+programming, scaler/cursor proof, pixel PLL/PHY, complete link rollback
 and AZALIA/HDA audio coordination remain required, as do the other four card
 backends. The candidate stays outside the catalog and is not embedded in the
 unchanged r4 ISOs. No new physical-driver ISO has been delivered by this increment.

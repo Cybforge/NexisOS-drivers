@@ -1,0 +1,72 @@
+{
+  "source": "AMD Linux v6.12",
+  "license": "MIT; notices retained in every file",
+  "files": {
+    "dc_features.h": {
+      "upstream_sha256": "b260a3372550dabc84827b5d0b4fd041ac8a86a46cca37caceba2714ce304e41",
+      "adapted_sha256": "0aeab0c109e5d3d1815f6cc0f48dffe6f67499cdf7e8687ea5b2e4e051277a9c"
+    },
+    "display_mode_enums.h": {
+      "upstream_sha256": "eb0fe235de0aa7016916fda8554caa372ed2d6aa641e2834f13edd0c8d40520d",
+      "adapted_sha256": "0d857f847f9cd951c7e6e88d6510ab64b8871c2054b95c30248dd866c44ae51c"
+    },
+    "display_mode_structs.h": {
+      "upstream_sha256": "ca9502b61904f9ac7595ba9d737ed6c3dc9b1bbb5eb7793e5cef51d2e2a2ac19",
+      "adapted_sha256": "6a458e779992d57bc3a22ad337055d33be7e9947a1cedf9117da3f907d8dee0e"
+    },
+    "display_mode_vba.h": {
+      "upstream_sha256": "c7848622b82f0ffd805fe8153856b61320e4953ab180d7874114c7fd3955c522",
+      "adapted_sha256": "17bf1a5a9c38e6f6ca8ad5abcd6657a20de48bf252d32ffdbe4fd7be182eb41f"
+    },
+    "display_mode_lib.h": {
+      "upstream_sha256": "8ed6ea62183b272c5d438fa7e554e6a287ec9f5a064222483df302348d8e6b77",
+      "adapted_sha256": "0f86d1c21493d7af1add00b8306851358fe9361ee54a4852c18ceca3439f0f63"
+    },
+    "display_mode_vba.c": {
+      "upstream_sha256": "66f311d4c7967994351d7180ad6631efd0b014bc1252d731063447e0e411ef92",
+      "adapted_sha256": "c8e451ac96f1fedd512b65e91e18e6ef5eeb9839227cd4a6a3af61b814789ba3"
+    },
+    "dml_inline_defs.h": {
+      "upstream_sha256": "3c57c7c9ffc4481282f72912efd72a7f0fa17da824f5eb1cb52f8ef96fcd059a",
+      "adapted_sha256": "ec6e16bea54edfce84cb1f8fca3253444eefe7b499f27100bdfc7ec5afee52d5"
+    },
+    "dcn_calc_math.h": {
+      "upstream_sha256": "197baec4d0046cd7d9989d59aca71f78eb44e805c8a76ff8e1a50a7ff3a2fd69",
+      "adapted_sha256": "c897319f1faf3858534e5661853c3fc9e09121d92bb0513242bbf038a3bc4aaf"
+    },
+    "dcn_calc_math.c": {
+      "upstream_sha256": "0bec846715ee48891d74fef318e5569a08319248bd9185980aeb07385b31cf73",
+      "adapted_sha256": "d929171d27d2421c1a962c9fdf7fb76cd30025005d181d3fce71bf442cd078be"
+    },
+    "display_rq_dlg_helpers.c": {
+      "upstream_sha256": "646436b43c36fdb24b60aefd4a50099c72279cdc560af13ec90b20b412eac200",
+      "adapted_sha256": "b9a57a5f5d79b935984e429c5570454418d012f2ad0ea47c773c07c43618f9d6"
+    },
+    "display_rq_dlg_helpers.h": {
+      "upstream_sha256": "861881e40c02858d33636303afb1452e8fc452c3fec107aaafd3d6c1862aebe7",
+      "adapted_sha256": "a1e05c00f01e2444f8ff4101dfcdc6e87ab0fe7dda8c61b5310f622b48395ff5"
+    },
+    "display_mode_vba_30.c": {
+      "upstream_sha256": "0b3ea50d4a01e8b76c4e513bf43e5141d7b0f49d1ef5bf8176cdd58bc87c048e",
+      "adapted_sha256": "43ef28b16d82da407ab500374b41c18da533c170e6cab03f5c5c2d8b974d146c"
+    },
+    "display_mode_vba_30.h": {
+      "upstream_sha256": "0d8d4f7537621ad4e4f3206be3f7d144a46a84ea538a764b4003558b507493e4",
+      "adapted_sha256": "bb05d639863c94cdcb053aa01ba8d37d0ecd075e5d860010995abf24408ce492"
+    },
+    "display_rq_dlg_calc_30.c": {
+      "upstream_sha256": "7376a14096a8f2444dbf2f0fde0f51e3f65e59b1ca9e9e5d1dd5ac0fa88e5e3d",
+      "adapted_sha256": "0f9487af3d5b7e7a1b3659bbdb194d4c2857c6f92337d086518fc1c3d81f2cb7"
+    },
+    "display_rq_dlg_calc_30.h": {
+      "upstream_sha256": "83a7d36210a9506b92733571064c396e3d1f5216c61b97c938d2ceabf48acdde",
+      "adapted_sha256": "84bca20a892b8a4015821843e7c44eac2c5e51ff7a1a66541f8bbdd4023372d6"
+    },
+    "dcn302_model.h": {
+      "upstream_file": "dcn302_fpu.c",
+      "upstream_sha256": "094f6054d95b0812ced8396a9532b4ab36f892877916ece7e76ad303ade152b6",
+      "adapted_sha256": "0a5ddbf7a7222614c992b5afdc06333c6d9cf1b3b609424f7a5dd84ab525cc2e",
+      "excluded": "placeholder clocks/states, min DCFCLK, VCO"
+    }
+  }
+}

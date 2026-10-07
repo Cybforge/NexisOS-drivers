@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "cases": 2074,
+  "checks": 3610,
+  "gddr6_vram_info_2_3_to_2_5": true,
+  "physical_hardware_verified": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_atom_memory.c": "113e6f7df8570199197f8604802bbb9bc586ada3ed38250d6301f549ab7df66e",
+    "tools/gpu-driver/amd/atom_memory.c": "1f8c808619966d8e69429d920c78215f4908b394a9c5e268c466c056c2bd52cb",
+    "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
+    "tools/gpu-driver/amd/atom_memory.h": "a3b33c2de9fcce236365ef52eda25c93fd743fdc0fdeefe5f3f912878a0e9106",
+    "tools/gpu-driver/amd/atom_tables.h": "3bb63f8a49aa950cf22256e6012e98c604e6fe7db29ee950b45a2f9c9b6be48c",
+    "scripts/test_atom_memory.py": "732c55e3f4b53e2ed17136fed209a33f88800aab3ff0a580f18c2dcc744564af"
+  }
+}

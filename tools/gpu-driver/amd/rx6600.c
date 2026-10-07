@@ -70,6 +70,37 @@ static enum rx6600_error prove(rx6600_state *s){
     if(memcmp(&s->surface,&surface,sizeof(surface)))return RX6600_CHANGED;
     return RX6600_OK;
 }
+static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *timing,bool prepared,dcn302_dml_output *out){
+    if(!out)return false;
+    memset(out,0,sizeof(*out));rx6600_state *s=context;
+    if(!s || !timing || !s->ready || s->busy || s->dfs_transaction.dirty || s->dfs_transaction.poisoned ||
+       timing->hactive!=s->route.shape.hactive || timing->vactive!=s->route.shape.vactive)return false;
+    s->busy=true;s->error=RX6600_BANDWIDTH;bool ok=false;enum rx6600_error error=prove(s);
+    if(error){fail(s,error);goto done;}
+    if(prepared && (!s->dfs_transaction.prepared || s->dfs_transaction.applied ||
+       !s->dfs_transaction.after.valid || memcmp(&s->dfs_transaction.before,&s->dfs,sizeof(s->dfs))))goto done;
+    /* Require owned acknowledged UCLK/DCF/SOC/PHY floors; DPM minima alone
+     * cannot guarantee the model's bandwidth after firmware takeover. */
+    const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
+    for(unsigned n=0;n<4;n++)if(!s->smu.floor_known[clocks[n]] || !s->smu.floor_mhz[clocks[n]])goto done;
+    const dcn302_dfs_snapshot *dfs=prepared?&s->dfs_transaction.after:&s->dfs;
+    dcn302_dml_job *j=&s->dml_job;memset(j,0,sizeof(*j));j->workspace=&s->dml_workspace;
+    dcn302_dml_input *i=&j->input;i->timing=*timing;i->pitch_pixels=s->surface.pitch;i->pipe=s->route.otg;
+    i->channels=s->memory.channels;i->channel_bytes=s->memory.channel_bytes;
+    i->dram_mts=(uint32_t)s->smu.floor_mhz[DCN302_SMU_UCLK]*16u;
+    i->dcf_khz=(uint32_t)s->smu.floor_mhz[DCN302_SMU_DCEFCLK]*1000u;
+    i->soc_khz=(uint32_t)s->smu.floor_mhz[DCN302_SMU_SOCCLK]*1000u;
+    /* DCN302's discrete-GDDR6 bounding-box fabric clock uses DCFCLK, per
+     * AMD dcn302_fpu.c. It is not a fabricated measured FCLK. */
+    i->fabric_khz=i->dcf_khz;i->phy_khz=(uint32_t)s->smu.floor_mhz[DCN302_SMU_PHYCLK]*1000u;
+    i->disp_khz=dfs->disp_khz;i->dpp_khz=dfs->pipe_khz[s->surface.hubp];i->ref_khz=s->board.reference_khz;
+    i->vco_khz_q32=(((uint64_t)(dfs->pll&DCN302_DFS_INTEGER_MASK)<<32)|(dfs->pll&DCN302_DFS_FRACTION_MASK))*100000u;
+    unsigned line;enum nexis_dml_scope_result scope=dcn302_dml_calculate(j,&line);
+    if(scope!=NEXIS_DML_SCOPE_OK || j->error!=DCN302_DML_OK){s->error=RX6600_BANDWIDTH;goto done;}
+    *out=j->output;ok=true;s->error=RX6600_OK;
+done:
+    s->busy=false;return ok;
+}
 enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     if(!s)return RX6600_INPUT;
     memset(s,0,sizeof(*s));
@@ -81,7 +112,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;
     if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
        s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||
@@ -89,6 +120,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     atom_rom rom;
     if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom))return fail(s,RX6600_ROM);
     if(atom_board_open(&rom,&s->board)!=ATOM_BOARD_OK)return fail(s,RX6600_BOARD);
+    if(atom_memory_open(&rom,&s->memory)!=ATOM_MEMORY_OK)return fail(s,RX6600_MEMORY);
     if(dcn302_route_find(&s->io,&s->board,k->width,k->height,&s->route)!=DCN302_ROUTE_OK)return fail(s,RX6600_ROUTE);
     if(dcn302_surface_bind(&s->io,&s->route,s->vram.base,s->vram.bytes,k->framebuffer,k->framebuffer_bytes,k->pitch,k->format,&s->surface)!=DCN302_SURFACE_OK)return fail(s,RX6600_SURFACE);
     dcn302_snapshot fixed;
@@ -98,8 +130,8 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
        s->clock.pixel_khz>s->route.max_tmds_khz)return fail(s,RX6600_CLOCK);
     if(dcn302_dfs_read(&s->io,&s->dfs))return fail(s,RX6600_CLOCK);
     if(!dcn302_smu_open(&s->smu,&s->io,now))return fail(s,RX6600_SMU);
-    const enum dcn302_smu_clock clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_DISPCLK,DCN302_SMU_DPPCLK,DCN302_SMU_PHYCLK};
-    for(unsigned n=0;n<5;n++){
+    const enum dcn302_smu_clock clocks[]={DCN302_SMU_SOCCLK,DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_DISPCLK,DCN302_SMU_DPPCLK,DCN302_SMU_PHYCLK};
+    for(unsigned n=0;n<6;n++){
         dcn302_smu_limits limits;
         if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits))return fail(s,RX6600_SMU);
     }

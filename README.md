@@ -24,8 +24,14 @@ native DFS/DTO transaction reads the real PLL/dividers, quantizes clocks,
 requires all five pipelines stopped and adequate owned SMU floors, and applies
 and restores actual display/DPP clock registers. Uncertain pending requests
 are not replayed; exact fractional PLL math protects voltage-floor rounding.
-Full bandwidth/DLG, pixel PLL/PHY and coordinated HDMI audio modesetting remain
-pending; it is not a complete card driver or catalog package. See
+The retained backend now also decodes GDDR6 VRAM_INFO 2.3/2.4/2.5, requires
+consistent module geometry and queries native SOCCLK limits. The pinned AMD
+DCN30 VBA/RQ/DLG engine computes a single RGB8 pipe's bandwidth, clocks,
+watermarks and deadline/request values using board memory width, acknowledged
+UCLK/DCF/SOC/PHY floors and explicit current/prepared DFS clocks. Its FP scope
+preserves x87/XMM/MXCSR and turns math assertions into rejected calculations.
+Native HUBP/HUBBUB/global-sync programming, pixel PLL/PHY and coordinated HDMI
+audio modesetting remain pending; it is not a complete card driver or catalog package. See
 `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
 
@@ -75,6 +81,11 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 - `tools/gpu-driver/amd/dcn302_clock.c`: calibrated native frame-counter timing proof; no EDID/requested clock fallback.
 - `tools/gpu-driver/amd/dcn302_smu.c`: actual native DAL mailbox, version/clock-limit checks, acknowledged clock floors and uncertain-request quarantine.
 - `tools/gpu-driver/amd/dcn302_dfs.c`: native PLL/divider/DTO readback and stopped-pipeline display/DPP clock transaction with verified rollback and voltage-floor checks.
+- `tools/gpu-driver/amd/atom_memory.c`: bounded consistent GDDR6 board topology, never guessed active memory clocks.
+- `tools/gpu-driver/amd/dcn302_dml.c`: scoped complete AMD DCN30 bandwidth/RQ/DLG calculation for one linear RGB8 HDMI pipeline; no register writes.
+- `tools/gpu-driver/amd/dml/`: checksum-pinned AMD MIT math source with original notices and reproducible platform-only adaptations.
+- `scripts/import_dcn30_dml.py`: verifies upstream hashes, preserves the algorithm and excludes board/clock placeholders from the ASIC template.
+- `scripts/test_dcn302_dml.py`: complete math and real retained PIC calculations, FP-state/error recovery and sanitizer checks; no claim of physical hardware verification.
 - `tools/gpu-driver/common/memory.c`: freestanding module memory primitives, without C library/kernel imports.
 - `scripts/generate_dcn302*_regs.py`: exact register subsets generated from checksum-pinned AMD Linux v6.12 source definitions.
 - `scripts/test_dcn302*.py`: native-code register models, transaction failures and undefined-behavior checks.

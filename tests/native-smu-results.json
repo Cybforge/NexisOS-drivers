@@ -1,15 +1,15 @@
 {
   "passed": true,
-  "cases": 194,
+  "cases": 197,
   "native_dal_smu_transport": true,
   "actual_floor_command": true,
   "display_clock_readback_proven": false,
   "physical_hardware_verified": false,
   "undefined_behavior_sanitizer_passed": true,
   "source_sha256": {
-    "tests/host/test_dcn302_smu.c": "ecb5009b5506743ef4a157073d563d0daaed062b0c79a956fdcd25b851c5192c",
-    "tools/gpu-driver/amd/dcn302_smu.c": "42520c19aa35fece72a1ea849774bbf0597490965fdd310a7275c4be811e1a43",
-    "tools/gpu-driver/amd/dcn302_smu.h": "cdc250db28b020920c8637a9d2627b8ba973e30a329eacc2e69fa51faf014429",
+    "tests/host/test_dcn302_smu.c": "a40c4ad692e7f07105a6263d60d5f49927657cffc1efbbb6b9dfef4c300c26aa",
+    "tools/gpu-driver/amd/dcn302_smu.c": "a5c3a0cb0ea424775a723f8e1b0b96f28e49aac0748a6013bfc3bffba325854e",
+    "tools/gpu-driver/amd/dcn302_smu.h": "eb75f499753b12f74ab54091ffb53f0a8f654f4ce6f5766ccf4954f148699537",
     "tools/gpu-driver/include/nexis_gpu_v2.h": "b10b7d226ec0e6831eca0b6daec63526762761acc88b474c64b8810f62aa8871",
     "scripts/test_dcn302_smu.py": "8d8c00e046ceafda6bcd2df870ccab7aa4b24bb5200707f35add68179b4ba460"
   }
