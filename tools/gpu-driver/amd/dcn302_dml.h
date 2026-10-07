@@ -20,6 +20,7 @@ typedef struct {
     display_rq_regs_st rq;
     display_dlg_regs_st dlg;
     display_ttu_regs_st ttu;
+    uint32_t frac_urg_nom,frac_urg_flip; /* DML urgent-bandwidth fractions *1000, rounded up. */
 } dcn302_dml_output;
 typedef struct {struct display_mode_lib lib;display_e2e_pipe_params_st pipe;dcn302_dml_output result;} dcn302_dml_workspace;
 typedef struct {

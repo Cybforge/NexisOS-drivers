@@ -9,11 +9,17 @@ static bool write_reg(void *context,uint32_t offset,uint32_t value){
 static bool delay(void *context,uint32_t us){rx6600_state *s=context;return s->services->delay_us(s->services->service_context,us);}
 static uint64_t now(void *context){rx6600_state *s=context;return s->services->time_us(s->services->service_context);}
 static enum rx6600_error fail(rx6600_state *s,enum rx6600_error error){s->ready=false;s->error=error;return error;}
+static bool resources(rx6600_state *);
 static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock,uint32_t mhz,uint32_t *out){
     if(!out)return false;
     *out=0;rx6600_state *s=context;
-    if(!s || !s->ready || s->busy)return false;
-    if(s->hubp_transaction.dirty){
+    if(!s || !s->services || !s->ready || s->busy)return false;
+    if(!resources(s)){fail(s,RX6600_RESOURCE);return false;}
+    /* PSTATE_ALLOW is forced low by this fixed-floor model. Even an upward
+     * UCLK request can require a transition; defer every such command until
+     * the old policy is restored, not just requests below the floor. */
+    if(clock==DCN302_SMU_UCLK && (s->hubbub_transaction.dirty || s->hubbub_transaction.applied || s->hubbub_transaction.poisoned))return false;
+    if(s->hubp_transaction.dirty || s->hubp_transaction.applied || s->hubbub_transaction.dirty || s->hubbub_transaction.applied){
         const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
         for(unsigned n=0;n<4;n++)if((unsigned)clock==clocks[n] && mhz<s->hubp_floor_mhz[n])return false;
     }
@@ -37,6 +43,10 @@ static bool NEXIS_GPU_CALL display_clocks(void *context,const dcn302_dfs_request
     rx6600_state *s=context;
     if(!s || !s->services || s->busy || (!s->ready && op!=RX6600_DFS_RESTORE) || (unsigned)op>RX6600_DFS_RESTORE ||
        (op==RX6600_DFS_PREPARE?!r:r!=NULL))return false;
+    /* RQ/DLG and watermarks are bound to these exact clocks. Restore them
+     * before changing clocks, including a DFS rollback. */
+    if(op!=RX6600_DFS_PREPARE && (s->hubp_transaction.dirty || s->hubp_transaction.applied ||
+       s->hubbub_transaction.dirty || s->hubbub_transaction.applied))return false;
     s->busy=true;enum dcn302_dfs_error error=DCN302_DFS_OK;
     if(!resources(s)){fail(s,RX6600_RESOURCE);s->busy=false;return false;}
     if(op==RX6600_DFS_PREPARE){
@@ -66,6 +76,8 @@ static enum rx6600_error prove(rx6600_state *s){
     if(!s->smu.ready || s->smu.poisoned)return RX6600_SMU;
     dcn302_dfs_snapshot dfs;
     if(dcn302_dfs_read(&s->io,&dfs) || memcmp(&s->dfs,&dfs,sizeof(dfs)))return RX6600_CLOCK;
+    dcn302_reference ref;
+    if(dcn302_reference_read(&s->io,s->board.reference_khz,&ref) || !dcn302_reference_equal(&ref,&s->reference))return RX6600_CLOCK;
     if(!fixed_rate(s))return RX6600_CLOCK;
     if(dcn302_route_find(&s->io,&s->board,k->width,k->height,&route)!=DCN302_ROUTE_OK)return RX6600_ROUTE;
     /* Identity and complete geometry, including OPP routing, remain stable. */
@@ -97,7 +109,7 @@ static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *
     /* DCN302's discrete-GDDR6 bounding-box fabric clock uses DCFCLK, per
      * AMD dcn302_fpu.c. It is not a fabricated measured FCLK. */
     i->fabric_khz=i->dcf_khz;i->phy_khz=(uint32_t)s->smu.floor_mhz[DCN302_SMU_PHYCLK]*1000u;
-    i->disp_khz=dfs->disp_khz;i->dpp_khz=dfs->pipe_khz[s->surface.hubp];i->ref_khz=s->board.reference_khz;
+    i->disp_khz=dfs->disp_khz;i->dpp_khz=dfs->pipe_khz[s->surface.hubp];i->ref_khz=s->reference.khz;
     i->vco_khz_q32=(((uint64_t)(dfs->pll&DCN302_DFS_INTEGER_MASK)<<32)|(dfs->pll&DCN302_DFS_FRACTION_MASK))*100000u;
     unsigned line;enum nexis_dml_scope_result scope=dcn302_dml_calculate(j,&line);
     if(scope!=NEXIS_DML_SCOPE_OK || j->error!=DCN302_DML_OK){s->error=RX6600_BANDWIDTH;goto done;}
@@ -111,19 +123,22 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
        (!s->ready && op!=RX6600_HUBP_RESTORE) ||
        (op==RX6600_HUBP_PREPARE?!timing:(timing!=NULL || prepared)))return false;
     dcn302_hubp_transaction *t=&s->hubp_transaction;
+    dcn302_hubbub_transaction *w=&s->hubbub_transaction;
     if(op==RX6600_HUBP_CANCEL){
-        if(t->dirty || t->applied || t->poisoned)return false;
-        memset(t,0,sizeof(*t));memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));
+        if(t->dirty || t->applied || t->poisoned || w->dirty || w->applied || w->poisoned)return false;
+        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));
         memset(s->hubp_floor_mhz,0,sizeof(s->hubp_floor_mhz));return true;
     }
     if(op==RX6600_HUBP_PREPARE){
-        if(t->dirty || t->applied || t->poisoned)return false;
+        if(t->dirty || t->applied || t->poisoned || w->dirty || w->applied || w->poisoned)return false;
         /* Failed recalculation invalidates the prior prepared plan. */
-        memset(t,0,sizeof(*t));
+        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));
         dcn302_dml_output output;
         if(!bandwidth_plan(s,timing,prepared,&output))return false;
         s->busy=true;
         enum dcn302_hubp_error e=dcn302_hubp_prepare(&s->io,s->surface.hubp,timing,&output,t);
+        if(!e && dcn302_hubbub_prepare(&s->io,s->surface.hubp,&s->reference,&output,w))e=DCN302_HUBP_READBACK;
+        if(e){t->prepared=false;w->prepared=false;}
         if(!e){
             s->hubp_clock_target=prepared?s->dfs_transaction.after:s->dfs;
             const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
@@ -131,21 +146,33 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
         }
         s->busy=false;s->error=e?RX6600_BANDWIDTH:RX6600_OK;return !e;
     }
-    if(!t->prepared)return false;
+    if(!t->prepared || !w->prepared)return false;
+    if(op==RX6600_HUBP_APPLY && (t->dirty || t->applied || t->poisoned || w->dirty || w->applied || w->poisoned))return false;
     s->busy=true;
     if(!resources(s)){fail(s,RX6600_RESOURCE);s->busy=false;return false;}
     enum dcn302_hubp_error e=DCN302_HUBP_OK;
     if(op==RX6600_HUBP_BLANK)e=dcn302_hubp_blank(&s->io,t->hubp,now);
-    else if(op==RX6600_HUBP_RESTORE)e=dcn302_hubp_restore_disabled(&s->io,t);
+    else if(op==RX6600_HUBP_RESTORE){
+        dcn302_reference current;
+        if(dcn302_reference_read(&s->io,s->board.reference_khz,&current) ||
+           !dcn302_reference_equal(&current,&w->reference))e=DCN302_HUBP_READBACK;
+        if(!e)e=dcn302_hubp_restore_disabled(&s->io,t);
+        /* Do not release PSTATE/SR before the old fetch registers are back. */
+        if(!e && dcn302_hubbub_restore_disabled(&s->io,w))e=DCN302_HUBP_ROLLBACK;
+    }
     else{
         dcn302_dfs_snapshot current;
         if(!s->smu.ready || s->smu.busy || s->smu.poisoned || dcn302_dfs_read(&s->io,&current) ||
            memcmp(&current,&s->hubp_clock_target,sizeof(current)))e=DCN302_HUBP_READBACK;
         const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
         for(unsigned n=0;n<4;n++)if(!s->smu.floor_known[clocks[n]] || s->smu.floor_mhz[clocks[n]]<s->hubp_floor_mhz[n])e=DCN302_HUBP_READBACK;
-        if(!e)e=dcn302_hubp_apply_disabled(&s->io,t);
+        if(!e && dcn302_hubbub_apply_disabled(&s->io,w))e=DCN302_HUBP_READBACK;
+        if(!e){
+            e=dcn302_hubp_apply_disabled(&s->io,t);
+            if(e && !t->dirty && !t->poisoned && dcn302_hubbub_restore_disabled(&s->io,w))e=DCN302_HUBP_ROLLBACK;
+        }
     }
-    if(t->poisoned || (e && t->dirty))fail(s,RX6600_BANDWIDTH);
+    if(t->poisoned || w->poisoned || (e && (t->dirty || w->dirty)))fail(s,RX6600_BANDWIDTH);
     else s->error=e?RX6600_BANDWIDTH:RX6600_OK;
     s->busy=false;return !e;
 }
@@ -169,6 +196,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom))return fail(s,RX6600_ROM);
     if(atom_board_open(&rom,&s->board)!=ATOM_BOARD_OK)return fail(s,RX6600_BOARD);
     if(atom_memory_open(&rom,&s->memory)!=ATOM_MEMORY_OK)return fail(s,RX6600_MEMORY);
+    if(dcn302_reference_read(&s->io,s->board.reference_khz,&s->reference))return fail(s,RX6600_CLOCK);
     if(dcn302_route_find(&s->io,&s->board,k->width,k->height,&s->route)!=DCN302_ROUTE_OK)return fail(s,RX6600_ROUTE);
     if(dcn302_surface_bind(&s->io,&s->route,s->vram.base,s->vram.bytes,k->framebuffer,k->framebuffer_bytes,k->pitch,k->format,&s->surface)!=DCN302_SURFACE_OK)return fail(s,RX6600_SURFACE);
     dcn302_snapshot fixed;

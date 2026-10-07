@@ -89,6 +89,9 @@ __attribute__((used,noinline)) static void NEXIS_GPU_CALL calculate(void *contex
        !ceil_u32(get_wm_stutter_exit(l,p,1)*1000,&o->stutter_exit_ns) ||
        !ceil_u32(get_wm_stutter_enter_exit(l,p,1)*1000,&o->stutter_enter_exit_ns) ||
        !ceil_u32(get_wm_dram_clock_change(l,p,1)*1000,&o->dram_change_ns) ||
+       !ceil_u32(get_fraction_of_urgent_bandwidth(l,p,1)*1000,&o->frac_urg_nom) ||
+       !ceil_u32(get_fraction_of_urgent_bandwidth_imm_flip(l,p,1)*1000,&o->frac_urg_flip) ||
+       o->frac_urg_nom>1000 || o->frac_urg_flip>1000 ||
        !ceil_u32(get_vstartup(l,p,1,0),&o->vstartup) ||
        !ceil_u32(get_vupdate_offset(l,p,1,0),&o->vupdate_offset) ||
        !ceil_u32(get_vupdate_width(l,p,1,0),&o->vupdate_width) ||

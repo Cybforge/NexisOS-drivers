@@ -9,7 +9,7 @@ native=['tools/gpu-driver/amd/rx6600_module.c','tools/gpu-driver/amd/rx6600.c',
  'tools/gpu-driver/amd/atom_tables.c','tools/gpu-driver/amd/atom_board.c','tools/gpu-driver/amd/dcn302_route.c',
  'tools/gpu-driver/amd/dcn302_surface.c','tools/gpu-driver/amd/dcn302_otg.c','tools/gpu-driver/amd/dcn302_clock.c',
  'tools/gpu-driver/amd/dcn302_smu.c','tools/gpu-driver/amd/dcn302_dfs.c','tools/gpu-driver/amd/atom_memory.c',
- 'tools/gpu-driver/amd/dcn302_dml.c','tools/gpu-driver/amd/dcn302_hubp.c','tools/gpu-driver/amd/dml/nexis_dml_port.c',
+ 'tools/gpu-driver/amd/dcn302_dml.c','tools/gpu-driver/amd/dcn302_hubp.c','tools/gpu-driver/amd/dcn302_hubbub.c','tools/gpu-driver/amd/dml/nexis_dml_port.c',
  'tools/gpu-driver/amd/dml/display_mode_vba.c','tools/gpu-driver/amd/dml/display_mode_vba_30.c',
  'tools/gpu-driver/amd/dml/display_rq_dlg_calc_30.c','tools/gpu-driver/amd/dml/dcn_calc_math.c',
  'tools/gpu-driver/amd/dml/display_rq_dlg_helpers.c']
@@ -42,7 +42,8 @@ if args.sanitizer:
  report['undefined_behavior_sanitizer_passed']=True
 report.update(candidate=metadata,distributed=False,full_rx6600_driver_complete=False,physical_gpu_drivers_complete=0,
  real_pic_bandwidth_registers_executed=True,native_hubp_writes_and_reverse_rollback_modeled=True,
- native_hubp_clocks_and_floor_binding_verified=True)
+ native_hubp_clocks_and_floor_binding_verified=True,native_hubbub_watermarks_and_policy_integrated=True,
+ native_hubbub_reference_used_for_dml=True,native_uclk_change_rejected_while_pstate_forced=True)
 report['native_pic_floor_command_symbol']=floor
 report['native_pic_display_clock_command_symbol']=dfs
 report['native_pic_bandwidth_plan_symbol']=bandwidth
@@ -50,6 +51,7 @@ report['native_pic_bandwidth_registers_symbol']=hubp
 report['source_sha256']={s:hashlib.sha256((root/s).read_bytes()).hexdigest() for s in sources+['tools/gpu-driver/amd/rx6600.h','tools/gpu-driver/amd/dcn302_smu.h',
  'tools/gpu-driver/amd/dcn302_dfs.h','tools/gpu-driver/amd/dcn302_dfs_regs.h',
  'tools/gpu-driver/amd/atom_memory.h','tools/gpu-driver/amd/dcn302_dml.h','tools/gpu-driver/amd/dcn302_hubp.h','tools/gpu-driver/amd/dcn302_hubp_regs.h',
+ 'tools/gpu-driver/amd/dcn302_hubbub.h','tools/gpu-driver/amd/dcn302_hubbub_regs.h',
  *['tools/gpu-driver/amd/dml/'+p.name for p in (root/'tools/gpu-driver/amd/dml').iterdir() if p.suffix in ('.h','.json')],
  'tools/gpu-driver/common/memory.c','tools/gpu-driver/include/nexis_gpu_v2.h','scripts/build_gpu_module_v2.py','scripts/test_rx6600.py']}
 (out/'report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))

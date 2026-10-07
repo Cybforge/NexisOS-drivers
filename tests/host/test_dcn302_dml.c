@@ -72,6 +72,12 @@ int main(int argc,char **argv){
         CHECK(result==NEXIS_DML_SCOPE_OK && j.error==DCN302_DML_OK && !line);
         CHECK(j.output.disp_khz>=modes[m].pixel_khz && j.output.urgent_ns>=4000);
         CHECK(j.output.vstartup>=1 && j.output.vstartup<modes[m].vtotal-modes[m].vactive);
+        double nom=workspace.lib.vba.FractionOfUrgentBandwidth*1000;
+        double flip=workspace.lib.vba.FractionOfUrgentBandwidthImmediateFlip*1000;
+        CHECK(j.output.frac_urg_nom<=1000 && j.output.frac_urg_nom>=nom &&
+            (j.output.frac_urg_nom?j.output.frac_urg_nom-1<nom:nom==0));
+        CHECK(j.output.frac_urg_flip<=1000 && j.output.frac_urg_flip>=flip &&
+            (j.output.frac_urg_flip?j.output.frac_urg_flip-1<flip:flip==0));
     }
     /* Independent units: 100 MHz reference over the exact pixel clock yields
      * fixed-point RQ/DLG reference/pixel ratio and reference cycles per line. */

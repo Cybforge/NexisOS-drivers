@@ -1,0 +1,17 @@
+{
+  "source": "AMD Linux v6.12",
+  "upstream_sha256": {
+    "dcn302_offset.h": "052c86b51b20d93b99c95b2556fd68b4ecd5ae2388c59a8b2b08a4a00e2ea780",
+    "dcn302_mask.h": "8491525dd88e7ee6fec5f926ee93ee1a2d16953428637325bfd2aaa98c77822b",
+    "dimgrey_cavefish_ip_offset.h": "cd6b042e6ec1e8f71549828fa225182b0bb00c7be6b556ad0d3591d200afedf2",
+    "dcn30_hubbub.c": "47ab0d94c3f456d11ab1ac42d1cc6d3fffd61bb9c252f0aa1fef5aa9cfc6a790",
+    "dcn21_hubbub.c": "edee9e3284b019d0ecd0671bf5bbaa7a5cbae09f05c6638beb442db03b665197",
+    "dcn10_hubbub.c": "064c85bbc900997e7065720740c03f7759b85d190f839043c2b2feb455496a82",
+    "dcn20_hubbub.c": "402bf2e371a6503c091f79867e1464ef71ef980e92c6c348b42718ee624cfbde",
+    "dcn20_dccg.c": "e4a840c109ae9d00f796de6c13610cffe97c61c4b1c025cc02d686fef815753e",
+    "dcn30_dccg.c": "4d73ceb9124885609b4ee8e44af7f68c87e262e980505a3f3485f1cbc403a951"
+  },
+  "registers": 31,
+  "fields": 50,
+  "generated_sha256": "fde5c53d606d910c27973af4021963266cfff359a801cbc922d502b8ebe2662b"
+}

@@ -77,16 +77,39 @@ reject application; dirty HUBP plans prevent lowering their required floors.
 This executes after module entry at two simultaneously allocated PIC bases.
 Readback verifies configuration/shadow fields, not active physical scanout.
 
-Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 254 cases,
-ATOM memory 2,074 cases, complete DML/PIC math 467 cases and HUBP 6,701 cases;
+The retained RX6600 also programs native HUBBUB watermarks and fixed-floor
+policy. The actual AMD DCN3 inheritance obtains the ROM crystal through DCCG
+and then applies HUBBUB's enabled timer/divider. DML previously used the
+undivided crystal directly; it now uses the verified 40..60-MHz native HUBBUB
+reference. Unknown alternative sources, disabled timers and unstable reference
+controls are rejected. No assumed RX6600 clock is substituted.
+
+The checked DML urgent-bandwidth fractions use 1000-unit fixed point. Nanosecond
+watermarks convert with 64-bit arithmetic, rounding up, and must fit Navi23's
+actual 14/16-bit fields; the larger clamp in shared upstream code is unsuitable
+for these native fields. The same minimum-floor plan populates all four sets.
+The model permits neither self refresh nor memory clock change, so SR/PSTATE
+allow signals are forced low before the watermark writes. Old HUBP fetch
+registers are restored first, then old watermarks and old force policy last.
+Read/write faults, posted and ignored writes and lost pipeline identity are
+exercised in the real retained PIC code. Failed restoration keeps it quarantined
+with scanout off. UCLK changes and conflicting DFS operations are rejected
+while the fixed-floor plan is installed. Floor changes also revalidate PCI
+resources before any mailbox write. These are native configuration operations;
+they do not prove that a physical firmware memory transition has completed.
+
+Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 778 cases,
+ATOM memory 2,074 cases, complete DML/PIC math 467 cases, HUBP 6,701 cases and
+HUBBUB 7,972 cases;
 all pass with warnings treated as errors and the undefined-behavior sanitizer.
-The RX6600 candidate is 192,576 bytes with 417,792-byte retained memory, no imports
+The RX6600 candidate is 200,768 bytes with 425,984-byte retained memory, no imports
 or runtime relocations. The MMIO/firmware responses are modeled, not physical
 hardware evidence. The 1080p 240-Hz timing passes the math test, which does not
 mean NexisOS has physically switched the card to that mode. The pure math
-harness is never installed as a driver. Native HUBBUB and retained OTG global-sync
+harness is never installed as a driver. Retained OTG global-sync
 integration, scaler/cursor proof, pixel PLL/PHY, complete link rollback
-and AZALIA/HDA audio coordination remain required, as do the other four card
+and AZALIA/HDA audio coordination remain required, along with full native
+memory/clock-policy transition proof and the other four card
 backends. The candidate stays outside the catalog and is not embedded in the
 unchanged r4 ISOs. No new physical-driver ISO has been delivered by this increment.
 

@@ -13,8 +13,11 @@ typedef struct {
     uint32_t fb_base,fb_top,fb_offset,period;
     uint32_t dfs_pll,dfs_dentist,dfs_control,dfs_dto[5];
     uint32_t hubp[5][DCN302_HUBP_REGISTER_COUNT];
+    uint32_t hubbub[DCN302_HUBBUB_REGISTER_COUNT],reference,timer;
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
     uint64_t time;unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
+    unsigned fail_mmio_write,ignore_mmio_write,activate_mmio_write,hubbub_writes,hubp_writes;
+    bool posted;
     bool frozen,invalid;
     nexis_gpu_resource vram,registers;
 } model;
@@ -35,7 +38,7 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
     unsigned encoders[]={0x211e,0x221e,0x2120,0x2220,0x2121};p16(b+412,encoders[link]);p16(b+416,34);p16(b+420,8);
     b[424]=1;b[425]=4;b[426]=(uint8_t)(0x90+ddc);b[428]=2;b[429]=4;b[430]=5;b[431]=1;b[432]=255;
     b[434]=20;b[435]=6;p32(b+436,4);b[440]=255;
-    p16(b+1600,84);b[1602]=4;b[1603]=4;p32(b+1608,60000);p16(b+1612,2700);p16(b+1614,2700);p16(b+1636,2700);
+    p16(b+1600,84);b[1602]=4;b[1603]=4;p32(b+1608,60000);p16(b+1612,10000);p16(b+1614,5000);p16(b+1636,2700);
     b[1642]=5;b[1644]=6;b[1645]=6;b[1646]=6;
     unsigned sum=0;for(unsigned n=0;n<2047;n++)sum+=b[n];b[2047]=(uint8_t)(0-sum);
 }
@@ -43,6 +46,9 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
     if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
     if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
+    if(offset==DCN302_HUBBUB_REF_BYTES){*out=m->reference;return true;}
+    if(offset==DCN302_HUBBUB_TIMER_BYTES){*out=m->timer;return true;}
+    for(unsigned r=0;r<DCN302_HUBBUB_REGISTER_COUNT;r++)if(offset==dcn302_hubbub_register_bytes[r]){*out=m->hubbub[r];return true;}
     if(offset==DCN302_DFS_PLL_BYTES){*out=m->dfs_pll;return true;}
     if(offset==DCN302_DFS_DENTIST_BYTES){*out=m->dfs_dentist;return true;}
     if(offset==DCN302_DFS_DTO_CTRL_BYTES){*out=m->dfs_control;return true;}
@@ -78,6 +84,15 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
     }
     m->writes++;
     for(unsigned i=0;i<5;i++)CHECK(!(m->otg[i][DCN302_R_CONTROL]&(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK)) && !(m->otg[i][DCN302_R_VTG]&DCN302_VTG_ENABLE_MASK));
+    for(unsigned r=0;r<DCN302_HUBBUB_REGISTER_COUNT;r++)if(offset==dcn302_hubbub_register_bytes[r]){
+        CHECK(!((value^m->hubbub[r])&~dcn302_hubbub_owned[r]));
+        if(r)CHECK((m->hubbub[0]&0x33)==0x22);
+        if(m->writes==m->ignore_mmio_write)return true;
+        if(m->writes==m->fail_mmio_write && !m->posted)return false;
+        m->hubbub[r]=value;m->hubbub_writes++;
+        if(m->writes==m->activate_mmio_write)m->otg[4][DCN302_R_CONTROL]|=DCN302_MASTER_ACTIVE_MASK;
+        return m->writes!=m->fail_mmio_write;
+    }
     if(offset==DCN302_DFS_DENTIST_BYTES){
         m->dfs_dentist=(value&~DCN302_DFS_DISP_READ_MASK)|((value&127)<<8)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;return true;
     }
@@ -87,11 +102,17 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
         CHECK(!(value&(dcn302_hubp_forbidden[r]|dcn302_hubp_readonly[r])));
         uint32_t current=m->hubp[i][r];
         for(unsigned sr=0;sr<DCN302_SURFACE_REGISTER_COUNT;sr++)if(offset==dcn302_surface_register_bytes[i][sr])current=m->surface[i][sr];
+        bool blank=r==DCN302_HUBP_R_DCHUBP_CNTL && ((current^value)&0x1001u);
+        if(!blank)CHECK((m->hubbub[0]&0x33)==0x22);
+        if(m->writes==m->ignore_mmio_write)return true;
+        if(m->writes==m->fail_mmio_write && !m->posted)return false;
         uint32_t next=(current&dcn302_hubp_readonly[r])|value;
         if(r==DCN302_HUBP_R_DCHUBP_CNTL && (value&0x1001u)==1u)next|=2;
         m->hubp[i][r]=next;
         for(unsigned sr=0;sr<DCN302_SURFACE_REGISTER_COUNT;sr++)if(offset==dcn302_surface_register_bytes[i][sr])m->surface[i][sr]=next;
-        return true;
+        if(!blank)m->hubp_writes++;
+        if(m->writes==m->activate_mmio_write)m->otg[4][DCN302_R_CONTROL]|=DCN302_MASTER_ACTIVE_MASK;
+        return m->writes!=m->fail_mmio_write;
     }
     m->invalid=true;return false;
 }
@@ -103,6 +124,7 @@ static bool NEXIS_GPU_CALL delay(void *ctx,uint32_t us){model *m=ctx;CHECK(us==1
 static uint64_t NEXIS_GPU_CALL now(void *ctx){return ((model *)ctx)->time;}
 static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,unsigned pipe,unsigned bus,unsigned hpd,unsigned opp,unsigned mpcc,unsigned hubp,unsigned format){
     memset(m,0,sizeof(*m));memset(k,0,sizeof(*k));rom_init(m,link,bus,hpd);m->period=4166;
+    m->timer=0x1002;
     m->smu_response=m->smu_status=1;m->smu_version=0x3a0100;m->smu_header=1;m->smu_interface=0x40;m->smu_features=3;
     m->dfs_pll=36|0x80000000u;m->dfs_dentist=24|(24u<<8)|(24u<<24)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;
     *k=(nexis_gpu_services){.abi=2,.size=112,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
@@ -143,7 +165,7 @@ static void normal(void){
 }
 static void failures(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out,zero={0};
-    for(unsigned fault=0;fault<27;fault++){
+    for(unsigned fault=0;fault<32;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);
         switch(fault){
             case 0:k.size=104;break;case 1:k.vendor=0x10de;break;case 2:k.device=0x73df;break;case 3:k.resource=NULL;break;
@@ -155,6 +177,8 @@ static void failures(void){
             case 17:k.write32=NULL;break;case 18:m.smu_version=0;break;case 19:m.smu_interface=0x3f;break;
             case 20:m.smu_header=2;break;case 21:m.smu_features=0;break;case 22:m.smu_status=0xfe;break;case 23:m.smu_response=0xab;break;
             case 24:m.rom[638]=0;break;case 25:m.rom[639]=32;break;case 26:m.rom[603]=6;break;
+            case 27:m.reference=1;break;case 28:m.timer=2;break;case 29:m.timer=0x1001;break;
+            case 30:p16(m.rom+1612,2700);break;case 31:p16(m.rom+1612,12001);break;
         }
         if(fault>=24){unsigned sum=0;for(unsigned n=0;n<2047;n++)sum+=m.rom[n];m.rom[2047]=(uint8_t)(0-sum);}
         CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !s.busy && !m.writes);
@@ -166,7 +190,7 @@ static void failures(void){
     for(unsigned op=1;op<=4;op++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);m.fail_query=op;CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !m.writes);cases++;
     }
-    for(unsigned fault=0;fault<20;fault++){
+    for(unsigned fault=0;fault<23;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);
         switch(fault){
             case 0:m.vram.bytes/=2;break;case 1:m.registers.base+=4096;break;case 2:m.hpd[1]=0;break;
@@ -179,6 +203,7 @@ static void failures(void){
             case 13:s.smu.poisoned=true;break;case 14:s.smu.ready=false;break;
             case 15:m.dfs_pll++;break;case 16:m.dfs_dentist&=~DCN302_DFS_DPP_DONE_MASK;break;
             case 17:m.dfs_control|=2;break;case 18:m.dfs_dto[1]=1;break;case 19:m.dfs_dentist^=1u<<24;break;
+            case 20:m.timer^=0x10000;break;case 21:m.reference=1;break;case 22:m.timer&=~0x1000u;break;
         }
         memset(&out,0xa5,sizeof(out));CHECK(!rx6600_read_mode(&s,&out) && !memcmp(&out,&zero,sizeof(out)) && !s.ready && !s.busy && !m.writes);cases++;
     }
@@ -223,7 +248,7 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     CHECK(native->clock_floor(native,DCN302_SMU_PHYCLK,600,&acknowledged));
     before=m.smu_triggers;
     CHECK(native->bandwidth_plan(native,&mode.timing,false,&bandwidth) && bandwidth.disp_khz>=mode.timing.pixel_khz && bandwidth.urgent_ns>=4000);
-    CHECK(native->dml_job.input.channels==8 && native->dml_job.input.channel_bytes==2 && native->dml_job.input.dram_mts==8928 && native->dml_job.input.ref_khz==27000);
+    CHECK(native->dml_job.input.channels==8 && native->dml_job.input.channel_bytes==2 && native->dml_job.input.dram_mts==8928 && native->dml_job.input.ref_khz==50000);
     CHECK(native->dml_job.input.pipe==3 && native->dml_job.input.dpp_khz==native->dfs.pipe_khz[1]);
     CHECK(m.smu_triggers==before && m.writes==completed_writes && native->ready && !native->busy);cases++;
     /* The old prepared target retains a smaller DPP DTO after restoration.
@@ -241,7 +266,7 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     native->smu.floor_known[DCN302_SMU_SOCCLK]=true;cases++;
     nexis_gpu_timing bad=mode.timing;bad.hactive++;
     CHECK(!native->bandwidth_plan(native,&bad,false,&bandwidth) && !memcmp(&bandwidth,&zero_bandwidth,sizeof(bandwidth)));cases++;
-    CHECK(native->bandwidth_registers(native,&mode.timing,false,RX6600_HUBP_PREPARE) && native->hubp_transaction.prepared && !native->hubp_transaction.dirty && m.writes==completed_writes);cases++;
+    CHECK(native->bandwidth_registers(native,&mode.timing,false,RX6600_HUBP_PREPARE) && native->hubp_transaction.prepared && native->hubbub_transaction.prepared && !native->hubp_transaction.dirty && m.writes==completed_writes);cases++;
     /* No writes until all real pipes are stopped and HUBP is drained. */
     CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==completed_writes);
     m.otg[3][DCN302_R_CONTROL]=0;m.surface[1][DCN302_SURFACE_R_HUBP]=2;
@@ -252,17 +277,57 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==blanked);
     native->smu.floor_mhz[DCN302_SMU_DCEFCLK]=600;m.dfs_pll++;
     CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==blanked);m.dfs_pll--;cases++;
-    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && native->hubp_transaction.applied && native->hubp_transaction.dirty && m.writes>blanked && !m.invalid);cases++;
+    m.timer^=0x10000;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && m.writes==blanked);m.timer^=0x10000;cases++;
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && native->hubp_transaction.applied && native->hubp_transaction.dirty && native->hubbub_transaction.applied && native->hubbub_transaction.dirty && (m.hubbub[0]&0x33)==0x22 && m.writes>blanked && !m.invalid);cases++;
+    unsigned bandwidth_writes=m.writes-blanked,wm_writes=m.hubbub_writes;
     triggers=m.smu_triggers;
     CHECK(!native->clock_floor(native,DCN302_SMU_DCEFCLK,599,&acknowledged) && m.smu_triggers==triggers);
+    CHECK(!native->clock_floor(native,DCN302_SMU_UCLK,600,&acknowledged) && !acknowledged && m.smu_triggers==triggers);
+    /* Applied plans still bind floors if no register write was necessary. */
+    native->hubp_transaction.dirty=native->hubbub_transaction.dirty=false;
+    CHECK(!native->clock_floor(native,DCN302_SMU_DCEFCLK,599,&acknowledged) && m.smu_triggers==triggers);
+    native->hubp_transaction.dirty=native->hubbub_transaction.dirty=true;
+    CHECK(!native->display_clocks(native,NULL,RX6600_DFS_RESTORE));cases++;
     CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_CANCEL));
-    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_RESTORE) && !native->hubp_transaction.dirty && !native->hubp_transaction.applied && !native->hubp_transaction.poisoned);cases++;
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_RESTORE) && !native->hubp_transaction.dirty && !native->hubp_transaction.applied && !native->hubp_transaction.poisoned && !native->hubbub_transaction.dirty && !native->hubbub_transaction.applied && !native->hubbub_transaction.poisoned && !m.hubbub[0]);cases++;
+    /* Exercise the actual combined retained code at each apply write,
+     * including a device-posted failure and a silently ignored write. */
+    model clean=m;
+    for(unsigned kind=0;kind<3;kind++)for(unsigned n=1;n<=bandwidth_writes;n++){
+        if(kind==2)m.ignore_mmio_write=m.writes+n;
+        else{m.fail_mmio_write=m.writes+n;m.posted=kind==1;}
+        CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY));
+        CHECK(native->ready && !native->busy && !native->hubp_transaction.dirty && !native->hubp_transaction.poisoned &&
+            !native->hubbub_transaction.dirty && !native->hubbub_transaction.poisoned && !m.invalid && !m.hubbub[0]);
+        CHECK(!memcmp(m.hubbub,clean.hubbub,sizeof(m.hubbub)) && !memcmp(m.hubp,clean.hubp,sizeof(m.hubp)) && !memcmp(m.surface,clean.surface,sizeof(m.surface)));
+        m.ignore_mmio_write=m.fail_mmio_write=0;m.posted=false;cases++;
+    }
+    /* If a pipe wakes after the first fetch write, keep forced policy and
+     * scanout off until an explicit later stopped-state restoration. */
+    m.activate_mmio_write=m.writes+wm_writes+1;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_APPLY) && !native->ready &&
+        native->hubp_transaction.poisoned && native->hubp_transaction.dirty && native->hubbub_transaction.dirty && (m.hubbub[0]&0x33)==0x22);
+    unsigned quarantined=m.writes;
+    CHECK(!native->bandwidth_registers(native,NULL,false,RX6600_HUBP_RESTORE) && m.writes==quarantined);
+    m.otg[4][DCN302_R_CONTROL]=0;m.activate_mmio_write=0;
+    CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_RESTORE) && !native->hubp_transaction.poisoned &&
+        !native->hubp_transaction.dirty && !native->hubbub_transaction.poisoned && !native->hubbub_transaction.dirty &&
+        !native->ready && !m.hubbub[0]);cases++;
+    /* Internal rollback clears register poison; only a new parent probe can
+     * restore readiness after the lost pipeline identity. */
+    out.shutdown(out.state);CHECK(entry(&k,&out)==RX6600_ROUTE); /* stopped pipe */
+    m.surface[1][DCN302_SURFACE_R_HUBP]=0;m.otg[3][DCN302_R_CONTROL]=control;
+    CHECK(entry(&k,&out)==0);native=out.state;
     CHECK(native->bandwidth_registers(native,NULL,false,RX6600_HUBP_CANCEL) && !native->hubp_transaction.prepared);
     CHECK(!native->bandwidth_registers(native,NULL,false,(enum rx6600_hubp_operation)-1));
     m.surface[1][DCN302_SURFACE_R_HUBP]=0;m.otg[3][DCN302_R_CONTROL]=control;
     completed_writes=m.writes;
     m.time+=500000;out.poll(out.state);CHECK(out.read_mode(out.state,&mode) && out.set_mode(out.state,&mode.timing));
     mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
+    init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(entry(&k,&out)==0);native=out.state;
+    m.registers.base+=4096;triggers=m.smu_triggers;
+    CHECK(!native->clock_floor(native,DCN302_SMU_UCLK,558,&acknowledged) && !acknowledged && !native->ready && m.smu_triggers==triggers);out.shutdown(out.state);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);k.size=104;memset(&out,0xa5,sizeof(out));nexis_gpu_instance zero={0};
     CHECK(entry(&k,&out)==RX6600_INPUT && !memcmp(&out,&zero,sizeof(out)) && !m.reads && !m.writes);cases++;
 }
