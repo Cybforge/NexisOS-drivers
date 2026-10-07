@@ -1,6 +1,6 @@
 # Physical display work: 2026-10-07
 
-Build ID: `physical-display-20261007-r1`.
+Build ID: `physical-display-20261007-r2`.
 
 The requested end state remains five physical GPU display drivers including
 RX6600, the highest supported monitor refresh rate, HDMI sound, and external
@@ -32,6 +32,27 @@ implemented or verified.** Bochs/QEMU support does not count as a physical drive
   extents, chain identity and legacy checksum. The SetPixelClock v1.7 parameter
   builder uses the required 100-Hz units; it does not execute the command yet.
 
+The new revision adds a bounded external ATOM bytecode interpreter. It checks
+the reachable command tables, instruction boundaries, operands and nested
+parameter windows before touching hardware. Register/PLL/MC accesses use
+checked callbacks. Indirect I/O, arithmetic, masks, conditions, command calls,
+scratch access and delays are implemented. Unsupported repeat/save/restore,
+PCI/SYSIO and unknown operations fail explicitly. Recursion, instructions,
+wall time and delays are bounded. IO failure stops immediately; a display
+backend must still implement hardware rollback. This interpreter is external
+supporting source and is not yet a complete RX6600 display backend.
+
+Retained module ABI2 and its kernel loader are implemented. PIC code, state and
+callbacks remain mapped; code and data have separate permissions, including
+RAM identity aliases. The shared module page-table branch is reserved before
+process creation. Firmware PCI resource extents are handed over without writing
+BARs. MMIO services check the BAR identity and bounds; the current implementation
+accepts register windows up to 16 MiB below 64 GiB. Activation requires a valid
+native hardware scanout readback with the existing framebuffer geometry. The
+compositor follows this read-back refresh rate and retains 60 Hz fallback.
+**No physical card module is in the catalog yet**, so these services do not
+switch an RX6600 out of GOP or establish HDMI transmission on their own.
+
 Read-only Windows inspection identified RX6600 (`1002:73ff`), AMD HDA
 `1002:aa01`, and Acer VG270 W3. The actual monitor EDID offers 1920x1080 at
 239.998 Hz, using 558.100 MHz pixel clock with a 600 MHz TMDS limit and SCDC.
@@ -40,9 +61,8 @@ only decoded as a local fixture; the monitor's serial data is not published.
 
 ## Remaining implementation
 
-1. Replace the init-only external graphics ABI with retained code/state and
-   checked services for hardware access, firmware commands and driver callbacks.
-2. Implement the AMD ATOM interpreter/native display integration, DCN302 scanout,
+1. Connect actual physical card modules to the retained ABI2 loader and catalog.
+2. Implement AMD native display integration using the bounded ATOM executor, DCN302 scanout,
    display-clock management, connector discovery and DDC/SCDC/link setup for
    RX6600. Unsupported firmware command versions must fail explicitly.
 3. Implement the other four actual physical card backends. PCI recognition,
@@ -62,6 +82,11 @@ The latest reports are `build/hdmi-tests/report.json`,
 `build/PHYSICAL_DISPLAY_MANIFEST.json` ties shipped artifacts to these sources
 and reports. Model tests verify commands/parsing only. QEMU checks verify generic
 HDA DMA, boot self-tests, desktop startup, DHCP and unchanged disposable disks.
+`build/gpu-runtime-tests/report.json` checks the real PIC package/image decoder,
+independent writable state after init, retained callbacks and memory permissions
+under Windows. It does not exercise kernel MMIO or physical GPU modesetting.
+ATOM tests include 3,000 bytecode mutations and an undefined-behavior sanitizer
+run. Loader tests and virtual audio do not prove physical display functionality.
 
 References: [AMD HDA descriptors](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/pci/hda/hda_eld.c),
 [AMD codec commands](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/pci/hda/patch_hdmi.c),

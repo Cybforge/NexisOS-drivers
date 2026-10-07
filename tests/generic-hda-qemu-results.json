@@ -1,8 +1,8 @@
 {
   "passed": true,
   "sample_rate": 48000,
-  "tone_duration_seconds": 0.7767083333333333,
-  "tone_frequency_hz": 438.90274314214463,
+  "tone_duration_seconds": 0.7704375,
+  "tone_frequency_hz": 440.02486016159105,
   "stereo_channels_equal": true,
   "kernel_selftests": "17/17",
   "physical_rx6600_verified": false,
@@ -10,5 +10,5 @@
   "expected_tone_seconds": 0.8,
   "maximum_codec_buffer_seconds": 0.042666666666666665,
   "sample_exact_playback_verified": false,
-  "image_sha256": "8d7f00e691898a0d1c041e8bd89e417156f4170fc110049af1d2a4e0421c5baf"
+  "image_sha256": "3cd300bf330302997182e186c80562be4b68870bddc1c87ea471c92cdfcdfbfd"
 }

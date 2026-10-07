@@ -66,6 +66,8 @@ typedef struct {
     uint32_t gpu_rom_size;
     uint16_t gpu_vendor,gpu_device;
     uint8_t gpu_bus,gpu_slot,gpu_func,gpu_reserved;
+    uint64_t gpu_bar_address[6];   /* UEFI PCI resource extents, not probed by writing BARs */
+    uint64_t gpu_bar_bytes[6];
 } __attribute__((packed)) nexis_boot_info_t;
 
 const nexis_boot_info_t *bootinfo_get(void);

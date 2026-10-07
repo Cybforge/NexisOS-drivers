@@ -8,9 +8,32 @@ struct nexis_efi_pci_io {
     EFI_STATUS (EFIAPI *pci_read)(nexis_efi_pci_io *,unsigned,UINT32,UINTN,VOID *);
     VOID *pci_write,*copy_mem,*map,*unmap,*allocate_buffer,*free_buffer,*flush;
     EFI_STATUS (EFIAPI *location)(nexis_efi_pci_io *,UINTN *,UINTN *,UINTN *,UINTN *);
-    VOID *attributes,*get_bar,*set_bar;
+    VOID *attributes;
+    EFI_STATUS (EFIAPI *get_bar)(nexis_efi_pci_io *,UINT8,UINT64 *,VOID **);
+    VOID *set_bar;
     UINT64 rom_size;VOID *rom_image;
 };
+static UINT64 gpu_resource_u64(const UINT8 *p){UINT64 value=0;for(unsigned n=0;n<8;n++)value|=(UINT64)p[n]<<(n*8);return value;}
+static void capture_gpu_bars(EFI_BOOT_SERVICES *bs,nexis_efi_pci_io *pci,nexis_boot_info_t *info){
+    if(!pci->get_bar)return;
+    for(unsigned n=0;n<6;n++){
+        VOID *resources=NULL;UINT64 attributes=0;
+        if(pci->get_bar(pci,(UINT8)n,&attributes,&resources)!=EFI_SUCCESS || !resources)continue;
+        const UINT8 *r=resources;
+        /* EFI PCI I/O returns one ACPI QWORD memory descriptor and an end tag.
+         * NexisOS currently supports segment zero with no address translation. */
+        if(r[0]==0x8a && r[1]==43 && !r[2] && !r[3] && r[46]==0x79 && !gpu_resource_u64(r+30)){
+            UINT64 start=gpu_resource_u64(r+14),bytes=gpu_resource_u64(r+38),granularity=gpu_resource_u64(r+6);
+            /* GetBarAttributes uses AddrRangeMax for alignment in EDK2;
+             * it is not the last byte of this resource. AddrLen is its size. */
+            if(start>=0x10000000 && start<(1ULL<<47) && !(start&4095) && bytes && !(bytes&4095) && bytes<=(1ULL<<47)-start &&
+               !(bytes&(bytes-1)) && !(start&(bytes-1)) && (granularity==32 || granularity==64)){
+                info->gpu_bar_address[n]=start;info->gpu_bar_bytes[n]=bytes;
+            }
+        }
+        bs->FreePool(resources);
+    }
+}
 static UINTN gpu_device_path_size(const UINT8 *path){
     if(!path)return 0;
     UINTN total=0;
@@ -47,6 +70,7 @@ static void capture_gpu_rom(EFI_BOOT_SERVICES *bs,EFI_HANDLE output,nexis_boot_i
            !segment && bus<=255 && slot<32 && func<8){
             info->gpu_vendor=(UINT16)cfg;info->gpu_device=(UINT16)(cfg>>16);
             info->gpu_bus=(UINT8)bus;info->gpu_slot=(UINT8)slot;info->gpu_func=(UINT8)func;
+            capture_gpu_bars(bs,best,info);
             /* BIOS tables are input for the future native AMD driver; never
              * enable a ROM BAR or copy a ROM from a different graphics card. */
             if(info->gpu_vendor==0x1002 && best->rom_image && best->rom_size>=512 && best->rom_size<=1024*1024){

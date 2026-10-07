@@ -5,11 +5,18 @@ It does not fulfill the request for five physical graphics drivers.
 
 Native physical-driver work is in progress. `kernel/drivers/audio/hdmi.c`
 contains an AMD `1002:aa01` stereo HDA codec helper, and `tools/gpu-driver/amd/`
-contains the initial bounded ATOM firmware parser. EDID/connector mode policy
+contains a bounded ATOM firmware parser and bytecode interpreter. EDID/connector mode policy
 and read-only UEFI ROM capture are also included as supporting source.
 These pieces do not yet initialize RX6600 scanout, set its display/link clocks,
 or establish HDMI transmission. See `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
-It is a native register driver for NexisOS, not a Linux .ko module. On a matching adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
+The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
+
+The retained ABI2 loader now provides persistent PIC code/state, checked
+callbacks, bounded register services, firmware-reported PCI resource extents
+and read-back mode validation. Its code pages are read-only/executable; data is
+writable/NX, and RAM identity aliases cannot write executable code. ABI2 has
+**no implemented physical card module in the download catalog yet**. The
+loader test fixture is not a graphics driver and is never distributed as one.
 
 ## Actual support
 
@@ -35,6 +42,10 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 
 - `tools/gpu-driver/bochs/bochs.c`: actual DISPI programming with rollback on failed attachment.
 - `tools/gpu-driver/include/nexis_gpu.h`: versioned init-only ABI.
+- `tools/gpu-driver/include/nexis_gpu_v2.h`: retained SysV x86-64 ABI.
+- `scripts/build_gpu_module_v2.py`: retained external module builder, rejects imports and runtime relocations.
+- `kernel/drivers/gpu/runtime.c`: retained module/scanout integration; activation requires hardware readback.
+- `tools/gpu-driver/amd/atom_vm.c`: bounded board-bytecode execution with explicit unsupported-operation errors.
 - `tools/gpu-driver/module.ld`: image layout.
 - `scripts/build_gpu_modules.py`: reproducible Zig 0.13 compiler build, rejects imports/relocations/writable program globals, creates the module and kernel pin.
 - `kernel/drivers/gpu/`: NexisOS loader/cache integration. Call `gpu_packages_poll()` from the Store's idle job poll. The installer calls `gpu_prepare_install()` and saves `gpu_install_payload()` to `/opt/nexis-drivers/bochs.ndrv` in the installed root.

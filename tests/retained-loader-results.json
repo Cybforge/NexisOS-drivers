@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "cases": 141,
+  "retained_pic_callbacks": true,
+  "physical_driver_tested": false,
+  "fixture": {
+    "bytes": 8256,
+    "memory_bytes": 12288,
+    "sha256": "deaef3b8aaad5645e8e6090727932fab5538cefbf1982f879a1a0a11df3af367"
+  },
+  "source_sha256": {
+    "kernel/drivers/gpu/module_image.c": "4af734d0760dce25e94ccee3325481b5a125f7de1d5f5482ed84f6c2c025d8a9",
+    "kernel/drivers/gpu/runtime.c": "4f171800c5983dc77a3db4d20114333cda54fde758b3b60225f50d6d81fabfdd",
+    "kernel/mm/vmm.c": "1dc546bd727ea30124ba2353e30dee407b0478f3675e18ace3d5245d78193b74",
+    "tools/gpu-driver/include/nexis_gpu_v2.h": "363464a41d14fcc3ba3cdf1c0aecafef5bed9390d18085300b96c87a25fdc5a0",
+    "scripts/build_gpu_module_v2.py": "84bb01f7798e8210b9ad89af4c13e0dc04df57708c872f7961e783c77b32dcde",
+    "tests/host/test_gpu_image.c": "2414cad05afc201b0ccbe411f1120ceba467256cba975837229ad99fa51a47c6",
+    "tests/host/gpu_v2_fixture.c": "43676d4c443873ea2fe23a8b4b496367b54b42b3091df7bc0fe53cd03be53d2c"
+  },
+  "kernel_runtime_hardware_tested": false
+}
