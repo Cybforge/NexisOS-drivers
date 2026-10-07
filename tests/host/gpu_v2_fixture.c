@@ -6,10 +6,15 @@ static bool set(void *p,const nexis_gpu_timing *t){(void)p;(void)t;return false;
 static void stop(void *p){(void)p;state.services=NULL;}
 static void poll(void *p){
     (void)p;uint32_t value=0;
+    if(state.services->size==NEXIS_GPU_SERVICES_RESOURCE_BYTES){
+        nexis_gpu_resource r;
+        if(!state.services->resource || !state.services->resource(state.services->service_context,0,&r) ||
+           r.base!=0x800000000ULL || r.bytes!=0x200000000ULL || r.flags!=7 || r.reserved)return;
+    }
     if(state.services->read32(state.services->service_context,5,4,&value)){state.last=value;state.polls++;}
 }
 int driver_init_v2(const nexis_gpu_services *services,nexis_gpu_instance *out){
-    if(!services || services->abi!=2 || services->size!=sizeof(*services) || !out)return -1;
+    if(!services || services->abi!=2 || (services->size!=NEXIS_GPU_SERVICES_BASE_BYTES && services->size!=NEXIS_GPU_SERVICES_RESOURCE_BYTES) || !out)return -1;
     state.services=services;out->abi=2;out->size=sizeof(*out);out->state=&state;out->state_bytes=sizeof(state);
     out->name="Retained loader test fixture";out->read_mode=mode;out->set_mode=set;out->poll=poll;out->shutdown=stop;return 0;
 }

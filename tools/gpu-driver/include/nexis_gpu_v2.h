@@ -18,6 +18,7 @@
 typedef struct {
     uint32_t entry,image_bytes,text_bytes,writable_offset,memory_bytes;
     uint16_t vendor,device;
+    uint32_t services_bytes;
 } nexis_gpu_image;
 typedef struct {
     uint32_t pixel_khz,hactive,hsync_start,hsync_end,htotal;
@@ -37,6 +38,16 @@ typedef struct {
     uint32_t pitch,format,flags,reserved;
 } nexis_gpu_scanout;
 bool nexis_gpu_mode_readback_matches(const nexis_gpu_scanout *,const nexis_gpu_timing *);
+/* V2 has two defined service prefixes. Older 104-byte modules remain loadable;
+ * modules requiring resource() declare 112 bytes in their NDRV header. The
+ * kernel sets size to that declared prefix, never silently changes an old ABI. */
+#define NEXIS_GPU_SERVICES_BASE_BYTES 104u
+#define NEXIS_GPU_SERVICES_RESOURCE_BYTES 112u
+#define NEXIS_GPU_RESOURCE_MEMORY 1u
+#define NEXIS_GPU_RESOURCE_64BIT 2u
+#define NEXIS_GPU_RESOURCE_PREFETCH 4u
+#define NEXIS_GPU_RESOURCE_REGISTERS 8u
+typedef struct {uint64_t base,bytes;uint32_t flags,reserved;} nexis_gpu_resource;
 typedef struct {
     uint32_t abi,size,width,height,pitch,format;
     uint16_t vendor,device;
@@ -48,7 +59,13 @@ typedef struct {
     bool (NEXIS_GPU_CALL *write32)(void *,unsigned bar,uint32_t byte_offset,uint32_t);
     uint64_t (NEXIS_GPU_CALL *time_us)(void *);
     bool (NEXIS_GPU_CALL *delay_us)(void *,uint32_t);
+    /* Read-only PCI extent, independently matched to UEFI and current PCI
+     * config. Does not map/access VRAM. REGISTERS alone permits read32/write32.
+     * Failure clears the output. The upper slot of a 64-bit BAR is not a BAR. */
+    bool (NEXIS_GPU_CALL *resource)(void *,unsigned bar,nexis_gpu_resource *);
 } nexis_gpu_services;
+_Static_assert(offsetof(nexis_gpu_services,resource)==NEXIS_GPU_SERVICES_BASE_BYTES,"GPU service prefix");
+_Static_assert(sizeof(nexis_gpu_services)==NEXIS_GPU_SERVICES_RESOURCE_BYTES,"GPU service layout");
 typedef struct {
     uint32_t abi,size;
     void *state;uint32_t state_bytes,reserved;

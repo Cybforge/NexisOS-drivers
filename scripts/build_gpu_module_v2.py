@@ -3,7 +3,8 @@
 from pathlib import Path
 import argparse,hashlib,os,shutil,struct,subprocess
 root=Path(__file__).resolve().parents[1]
-def build(sources,output,vendor,device):
+def build(sources,output,vendor,device,services_bytes=112):
+    assert services_bytes in (104,112),'Undefined retained service prefix'
     output=Path(output);output.parent.mkdir(parents=True,exist_ok=True)
     zig=os.environ.get('NEXIS_ZIG') or shutil.which('zig') or str(Path.home()/'Desktop/AetherOS/tools/zig/zig-windows-x86_64-0.13.0/zig.exe')
     elf=output.with_suffix('.elf')
@@ -40,11 +41,12 @@ def build(sources,output,vendor,device):
         payload[address:address+size]=data[section[4]:section[4]+size]
     header=bytearray(64);header[:4]=b'NDRV'
     struct.pack_into('<6I',header,4,2,entry,len(payload),text_end,writable,memory)
-    # x86-64 SysV layout is deliberately fixed; host test checks sizeof=104.
-    struct.pack_into('<HHII',header,32,vendor,device,104,64)
+    # Exact declared service prefix: legacy 104 bytes or resource extension 112.
+    # Host tests check both layouts and execute both versions as retained PIC.
+    struct.pack_into('<HHII',header,32,vendor,device,services_bytes,64)
     module=bytes(header)+payload;output.write_bytes(module)
-    return {'bytes':len(module),'memory_bytes':memory,'sha256':hashlib.sha256(module).hexdigest()}
+    return {'bytes':len(module),'memory_bytes':memory,'services_bytes':services_bytes,'sha256':hashlib.sha256(module).hexdigest()}
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--vendor',type=lambda x:int(x,16),required=True);p.add_argument('--device',type=lambda x:int(x,16),required=True)
-    p.add_argument('--output',type=Path,required=True);p.add_argument('sources',type=Path,nargs='+');a=p.parse_args()
-    print(build(a.sources,a.output,a.vendor,a.device))
+    p.add_argument('--output',type=Path,required=True);p.add_argument('--services-bytes',type=int,choices=(104,112),default=112);p.add_argument('sources',type=Path,nargs='+');a=p.parse_args()
+    print(build(a.sources,a.output,a.vendor,a.device,a.services_bytes))

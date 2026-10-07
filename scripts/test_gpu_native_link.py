@@ -31,5 +31,5 @@ assert info['memory_bytes']>=160000 and text_bytes>20000
 report={'passed':True,'freestanding_pic_link':True,'imports':False,'runtime_relocations':False,
  'native_code_symbols':{label:symbols[label] for label in required},'fixture':info,
  'distributed':False,'physical_card_driver':False,'physical_hardware_verified':False,
- 'source_sha256':{s:hashlib.sha256((root/s).read_bytes()).hexdigest() for s in sources+['scripts/build_gpu_module_v2.py','tools/gpu-driver/include/string.h','scripts/test_gpu_native_link.py']}}
+ 'source_sha256':{s:hashlib.sha256((root/s).read_bytes()).hexdigest() for s in sources+['scripts/build_gpu_module_v2.py','tools/gpu-driver/include/string.h','tools/gpu-driver/include/nexis_gpu_v2.h','scripts/test_gpu_native_link.py']}}
 (out/'link-report.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))

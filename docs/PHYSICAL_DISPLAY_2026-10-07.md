@@ -1,6 +1,6 @@
 # Physical display work: 2026-10-07
 
-Build ID: `physical-display-20261007-r3` (intermediate kernel correction).
+Build ID: `physical-display-20261007-r4` (intermediate resource-service build).
 
 The requested end state remains five physical GPU display drivers including
 RX6600, the highest supported monitor refresh rate, HDMI sound, and external
@@ -8,6 +8,24 @@ device-matched download/persistent installation. **This end state is not yet
 implemented or verified.** Bochs/QEMU support does not count as a physical driver.
 
 ## Completed work in this build
+
+- Retained ABI2 now exposes independently verified, read-only PCI resource
+  metadata, including large VRAM apertures. UEFI sizes are checked against live
+  PCI identity/class/type/command and both BAR samples. 64-bit upper slots are
+  excluded. Alignment, 32/64-bit limits and overlapping apertures are checked.
+  Large VRAM is not mapped as registers. Packed boot fields are copied into
+  aligned arrays. Legacy 104-byte and resource 112-byte service prefixes remain
+  explicit in the module header; the old prefix is tested against a guard page.
+- The external retained RX6600 adapter now joins the actual ATOM board wiring,
+  native DIG/FE/OTG/OPP route, HUBP/GOP VRAM translation and measured frame clock.
+  read_mode/poll/shutdown run after entry returns. Changed routing, surfaces,
+  PCI resources, hotplug and abnormal frame progression invalidate the output.
+  192 host cases execute both normal and genuinely loaded PIC callbacks, also
+  with UB sanitizer. This is a **development candidate, not a completed or
+  distributed driver**: set_mode only verifies an unchanged running mode.
+  Clock-changing modesetting, memory bandwidth, PHY and audio remain required.
+  The candidate is not embedded in either ISO or added to the Store catalog.
+  Later VRR/min/max-total changes invalidate a previously measured fixed clock.
 
 - AMD codec `1002:aa01` uses its native speaker/audio-descriptor commands instead
   of unsupported standard ELD reads. Revision 3+ uses independent left/right

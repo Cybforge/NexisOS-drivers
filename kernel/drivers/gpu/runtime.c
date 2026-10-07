@@ -1,4 +1,5 @@
 #include "runtime.h"
+#include "pci_resource.h"
 #include "display.h"
 #include "../framebuffer.h"
 #include "../serial.h"
@@ -16,15 +17,17 @@ static struct {
     nexis_gpu_image image;
     nexis_gpu_services services;
     nexis_gpu_instance driver;
+    nexis_gpu_resource resources[6];
+    pci_device_t device;
     char name[64];
 } R;
-static uint64_t time_us(void *context){
+static uint64_t NEXIS_GPU_CALL time_us(void *context){
     (void)context;uint64_t tsc,hz=pit_tsc_hz();uint32_t lo,hi;
     __asm__ volatile("rdtsc":"=a"(lo),"=d"(hi));tsc=(uint64_t)hi<<32|lo;
     if(!hz)return pit_get_ticks()*1000;
     return tsc/hz*1000000+(tsc%hz)*1000000/hz;
 }
-static bool delay_us(void *context,uint32_t us){
+static bool NEXIS_GPU_CALL delay_us(void *context,uint32_t us){
     if(us>250000)return false;
     uint64_t start=time_us(context);
     while(time_us(context)-start<us)__asm__ volatile("pause");
@@ -34,19 +37,45 @@ static bool register_address(void *context,unsigned bar,uint32_t offset,uint64_t
     if(context!=&R || bar>=6 || (offset&3) || !R.bar[bar] || R.bar_bytes[bar]<4 || offset>R.bar_bytes[bar]-4)return false;
     *out=R.bar[bar]+offset;return true;
 }
-static bool read32(void *context,unsigned bar,uint32_t offset,uint32_t *value){
+static bool NEXIS_GPU_CALL read32(void *context,unsigned bar,uint32_t offset,uint32_t *value){
     uint64_t address;if(!value || !register_address(context,bar,offset,&address))return false;
     *value=*(volatile uint32_t *)(uintptr_t)address;return true;
 }
-static bool write32(void *context,unsigned bar,uint32_t offset,uint32_t value){
+static bool NEXIS_GPU_CALL write32(void *context,unsigned bar,uint32_t offset,uint32_t value){
     uint64_t address;if(!register_address(context,bar,offset,&address))return false;
     *(volatile uint32_t *)(uintptr_t)address=value;__asm__ volatile("mfence":::"memory");return true;
 }
-static uint64_t pci_bar(pci_device_t *d,unsigned n){
-    uint32_t value=pci_read_dword(d->bus,d->slot,d->func,0x10+n*4);
-    if(!value || (value&1))return 0;
-    if((value&6)==4)return n<5?(uint64_t)pci_read_dword(d->bus,d->slot,d->func,0x14+n*4)<<32|(value&~15u):0;
-    return value&6?0:value&~15u;
+static void read_bars(const pci_device_t *d,uint32_t raw[6]){
+    for(unsigned n=0;n<6;n++)raw[n]=pci_read_dword(d->bus,d->slot,d->func,0x10+n*4);
+}
+static void firmware_ranges(const nexis_boot_info_t *boot,uint64_t base[6],uint64_t bytes[6]){
+    /* Boot handoff is packed. Copy fields to aligned arrays before decoding. */
+    for(unsigned n=0;n<6;n++){base[n]=boot->gpu_bar_address[n];bytes[n]=boot->gpu_bar_bytes[n];}
+}
+static bool device_ready(const pci_device_t *d){
+    return pci_read_dword(d->bus,d->slot,d->func,0)==((uint32_t)d->device_id<<16|d->vendor_id) &&
+        (pci_read_dword(d->bus,d->slot,d->func,8)>>24)==3 && (pci_read_word(d->bus,d->slot,d->func,4)&2) &&
+        !(pci_read_word(d->bus,d->slot,d->func,0x0e)&0x7f);
+}
+static bool NEXIS_GPU_CALL resource(void *context,unsigned bar,nexis_gpu_resource *out){
+    if(!out)return false;
+    memset(out,0,sizeof(*out));
+    if(context!=&R || bar>=6)return false;
+    const nexis_boot_info_t *boot=bootinfo_get();const pci_device_t *d=&R.device;
+    if(!boot || !device_ready(d))return false;
+    uint32_t raw[6],again[6];uint64_t base[6],bytes[6];read_bars(d,raw);firmware_ranges(boot,base,bytes);
+    nexis_gpu_resource live;
+    if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live) ||
+       live.base!=R.resources[bar].base || live.bytes!=R.resources[bar].bytes ||
+       live.flags!=(R.resources[bar].flags&~NEXIS_GPU_RESOURCE_REGISTERS))return false;
+    read_bars(d,again);
+    if(memcmp(raw,again,sizeof(raw)) || !device_ready(d))return false;
+    /* Confirm this aperture last, after the full sweeps. PCI display changes
+     * are serialized by the caller; this also detects a late BAR mutation
+     * after its slot was read early in a sweep. Never write/probe a BAR. */
+    if((live.flags&NEXIS_GPU_RESOURCE_64BIT) && pci_read_dword(d->bus,d->slot,d->func,0x14+bar*4)!=raw[bar+1])return false;
+    if(pci_read_dword(d->bus,d->slot,d->func,0x10+bar*4)!=raw[bar])return false;
+    *out=R.resources[bar];return true;
 }
 static void release(bool stop){
     if(stop && R.driver.shutdown)R.driver.shutdown(R.driver.state);
@@ -96,8 +125,8 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32
     uint8_t digest[32];sha256_hash(data,bytes,digest);if(memcmp(expected,digest,32))return false;
     const nexis_boot_info_t *boot=bootinfo_get();
     if(!boot || boot->gpu_vendor!=device->vendor_id || boot->gpu_device!=device->device_id || boot->gpu_bus!=device->bus ||
-       boot->gpu_slot!=device->slot || boot->gpu_func!=device->func || !(pci_read_word(device->bus,device->slot,device->func,4)&2))return false;
-    memset(&R,0,sizeof(R));R.image=image;R.pages=image.memory_bytes/4096;
+       boot->gpu_slot!=device->slot || boot->gpu_func!=device->func || !device_ready(device))return false;
+    memset(&R,0,sizeof(R));R.image=image;R.device=*device;R.pages=image.memory_bytes/4096;
     R.physical=pmm_alloc_pages(R.pages);
     if(!R.physical)return false;
     if(R.physical>=(64ULL<<30) || R.pages*4096>(64ULL<<30)-R.physical){
@@ -116,19 +145,22 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32
         if(!vmm_map_page(vmm_get_kernel_pml4(),BASE+offset,R.physical+offset,flags) ||
            !vmm_protect_identity(R.physical+offset,4096,(flags&PAGE_WRITABLE)|PAGE_NO_EXECUTE)){release(false);return false;}
     }
-    /* Only firmware-reported PCI memory resources are accessible. Large VRAM
-     * apertures are not register banks; scanout retains the existing surface. */
+    /* Metadata includes large VRAM apertures. Only independently matched small
+     * banks are mapped for register access; no large aperture is mapped here. */
+    uint32_t raw[6];uint64_t base_ranges[6],byte_ranges[6];read_bars(device,raw);firmware_ranges(boot,base_ranges,byte_ranges);
     for(unsigned n=0;n<6;n++){
-        uint64_t base=boot->gpu_bar_address[n],size=boot->gpu_bar_bytes[n];
-        if(base && base<(64ULL<<30) && size<=(64ULL<<30)-base && base==pci_bar(device,n) && size>=4096 && size<=16*1024*1024 && vmm_map_mmio(base,(size_t)size)){
+        if(!gpu_pci_resource_decode(raw,base_ranges,byte_ranges,n,&R.resources[n]))continue;
+        uint64_t base=R.resources[n].base,size=R.resources[n].bytes;
+        if(base<(64ULL<<30) && size<=(64ULL<<30)-base && size<=16*1024*1024 && vmm_map_mmio(base,(size_t)size)){
             R.bar[n]=base;R.bar_bytes[n]=size;
+            R.resources[n].flags|=NEXIS_GPU_RESOURCE_REGISTERS;
         }
     }
-    R.services=(nexis_gpu_services){2,sizeof(nexis_gpu_services),fb_get_width(),fb_get_height(),fb_get_pitch(),fb_is_rgb()?0:1,
+    R.services=(nexis_gpu_services){2,image.services_bytes,fb_get_width(),fb_get_height(),fb_get_pitch(),fb_is_rgb()?0:1,
         device->vendor_id,device->device_id,device->bus,device->slot,device->func,0,fb_front_base(),fb_front_size(),
         boot->gpu_rom_size && boot->gpu_rom_size<=1024*1024 && boot->gpu_rom_addr && boot->gpu_rom_addr<(1ULL<<32) &&
         boot->gpu_rom_size<=(1ULL<<32)-boot->gpu_rom_addr?(void *)(uintptr_t)boot->gpu_rom_addr:NULL,
-        boot->gpu_rom_size,0,&R,read32,write32,time_us,delay_us};
+        boot->gpu_rom_size,0,&R,read32,write32,time_us,delay_us,resource};
     if(!R.services.rom)R.services.rom_bytes=0;
     R.driver.abi=2;R.driver.size=sizeof(R.driver);R.calling=true;
     nexis_gpu_entry_v2 entry=(void *)(uintptr_t)(BASE+image.entry);

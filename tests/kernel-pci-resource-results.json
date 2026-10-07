@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "cases": 637,
+  "live_pci_firmware_resource_policy": true,
+  "pci_writes": false,
+  "physical_hardware_verified": false,
+  "kernel_callback": {
+    "passed": true,
+    "cases": 45,
+    "actual_kernel_resource_callback": true,
+    "pci_access_mode": "modeled_read_only",
+    "physical_hardware_verified": false
+  },
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_gpu_resource.c": "8695294ff5fd491af64023dfea8f4bfbc0d4cce76633bf530562fc17eb21beed",
+    "kernel/drivers/gpu/pci_resource.c": "8ad6e78e660a06dfc28457a403acbdbd1448d9245fbf9be776fd5e85ac07ce44",
+    "tests/host/test_gpu_resource_service.c": "6c3ade9350a9fdaea9e54bed625857731ad5c5c40f2c17ea0570ce1f92b51273",
+    "kernel/drivers/gpu/module_image.c": "8819b93bfd4728b51a287180b645b8dc38823a3b57d8a1afc55f3fb42cdac4bd",
+    "kernel/drivers/gpu/mode_policy.c": "c9c3086b85454219a01e76f06ef4ed2e2eb4ff7a0e05624716e4e20b7eb0bc8f",
+    "kernel/drivers/gpu/pci_resource.h": "53d76d1c4cf13954a589a67e289546b1179727ebc530b1d9380fbb8ff9480018",
+    "tools/gpu-driver/include/nexis_gpu_v2.h": "b10b7d226ec0e6831eca0b6daec63526762761acc88b474c64b8810f62aa8871",
+    "kernel/drivers/gpu/runtime.c": "e172202609be3b4b7ae6315f8861bfe717c340fd4ccc2d44182804dcb4d97ee6",
+    "scripts/test_gpu_resource.py": "1113ff299a2240713379eff1168784e790220d0bbc624bb3ee01d7ebc7a9fd76"
+  }
+}
