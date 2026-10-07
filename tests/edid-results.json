@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "cases": 3032,
+  "efi_output_binding": {
+    "passed": true,
+    "cases": 9,
+    "wrong_output_edid_rejected": true
+  },
+  "monitor_fixture": {
+    "name": "VG270 W3",
+    "width": 1920,
+    "height": 1080,
+    "refresh_millihz": 239998,
+    "clock_khz": 558100,
+    "sink_max_tmds_khz": 600000,
+    "scdc": true,
+    "stereo_48k16": true,
+    "active_mode_changed": false
+  },
+  "native_gpu_modesetting_verified": false,
+  "source_sha256": {
+    "kernel/drivers/gpu/edid.c": "1b995c3be19af962b837debdc9ac06031fa42acf60ce9863cae65cbb02b56870",
+    "kernel/drivers/gpu/edid.h": "fe18dc9513de908e1c7ec109a69335e6326119555c8d3d997a5de78cc401be7a",
+    "kernel/drivers/gpu/edid_timings.h": "38f818ac55d567932fe47b0cd3eb67371914a31d731e6986a365b13cd7157e04",
+    "boot/efi/edid.h": "24756b68e3a27b4bbe7fd2c0b075acc652e1f2320a763d9f8cf8fb6809b0acc0"
+  }
+}

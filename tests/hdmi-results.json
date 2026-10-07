@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "cases": 155,
+  "assertions": 5321,
+  "physical_hardware_tested": false,
+  "source_sha256": {
+    "tests\\host\\test_hdmi_codec.c": "a8e344f604c9de22e2abd474ef75fcc697d816c23037b2ee7e873ae4bdb2b9ba",
+    "kernel\\drivers\\audio\\hdmi.c": "b6fbf06710040e2bb81ae67daba4caaff37bf32441c9442e0030a5bccc57eda5"
+  }
+}

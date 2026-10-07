@@ -1,6 +1,14 @@
 # NexisOS external graphics drivers
 
 This repository currently contains one implemented driver: **QEMU standard VGA / Bochs DISPI**, PCI `1234:1111`.
+It does not fulfill the request for five physical graphics drivers.
+
+Native physical-driver work is in progress. `kernel/drivers/audio/hdmi.c`
+contains an AMD `1002:aa01` stereo HDA codec helper, and `tools/gpu-driver/amd/`
+contains the initial bounded ATOM firmware parser. EDID/connector mode policy
+and read-only UEFI ROM capture are also included as supporting source.
+These pieces do not yet initialize RX6600 scanout, set its display/link clocks,
+or establish HDMI transmission. See `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 It is a native register driver for NexisOS, not a Linux .ko module. On a matching adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
 
 ## Actual support
