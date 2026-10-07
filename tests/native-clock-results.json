@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "cases": 78,
+  "native_frame_counter_clock_measurement": true,
+  "requested_clock_used": false,
+  "physical_clock_verified": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_clock.c": "21be9bee9e08c4b8b725c88266bfb2cc860ffa867439ad555a1115cf0a708857",
+    "tools/gpu-driver/amd/dcn302_clock.c": "cdf336a6825fb8b7b3320c02065e07a262fcce1f1677db3bdac4e35bceed1676",
+    "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
+    "tools/gpu-driver/amd/dcn302_clock.h": "0bbf5c3418625c18829d9976b72aef2f2f2c7d1c1f11745030ee69f3a45d21c0",
+    "tools/gpu-driver/amd/dcn302_otg.h": "e7ba1172e746f42d38983de191d462ff975a18eb07eecb886ffaa8e053f80148",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_regs.py": "2d2b541580ba8f6635ff5ca6591481c23893ea9ceba049f7d8b6b7c1a90413eb"
+  }
+}

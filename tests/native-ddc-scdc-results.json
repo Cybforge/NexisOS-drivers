@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "cases": 1360,
+  "native_dcn302_i2c_transaction": true,
+  "native_i2c_scdc_integration": true,
+  "physical_i2c_verified": false,
+  "full_rx6600_driver_complete": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_ddc.c": "3a8207d3476c4c02eb275236869ddd0d283217385b7cef5606e12f0f2044fa76",
+    "tools/gpu-driver/amd/dcn302_ddc.c": "fe79e511411d3731dcbb531103775aa715d624360eccb71f6f054a0238fbf6ea",
+    "tools/gpu-driver/amd/hdmi_scdc.c": "00989b9bb9c256a3100cff2366b76a884a5a4acb62b437b5240dd41c1957edc4",
+    "tools/gpu-driver/amd/dcn302_ddc.h": "73aa4c96cb55f99aa97b8f3702bef23264d7941690f54dd9ba4adf1c174013fd",
+    "tools/gpu-driver/amd/hdmi_scdc.h": "0054842eadd256dfcce46d9e3df6b46d0729ee2a8a992eeeea476c4c95bbe9f1",
+    "tools/gpu-driver/amd/dcn302_ddc_regs.h": "0f33efc2cf9474bfd7fa57eabd37a504118b1510ad7ff61490471a01b8fa8b77",
+    "scripts/generate_dcn302_ddc_regs.py": "264f64ffdeb80a49c728b16c1b0e883149871a1b03ff04bb8721cff70e1542b1",
+    "scripts/generate_dcn302_regs.py": "2d2b541580ba8f6635ff5ca6591481c23893ea9ceba049f7d8b6b7c1a90413eb"
+  }
+}

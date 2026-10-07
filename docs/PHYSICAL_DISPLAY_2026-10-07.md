@@ -61,6 +61,41 @@ only decoded as a local fixture; the monitor's serial data is not published.
 
 ## Remaining implementation
 
+External backend source added after the r2 image (not loaded by that image):
+
+- DCN302/Navi23 OTG hardware register programming, native scanout enable/disable,
+  current geometry readback, hardware update locking and rollback. Single RGB
+  progressive pipelines are validated without rewiring the firmware's OPP.
+- Native shared I2C controller transactions for DDC1..DDC5, 144-byte FIFO,
+  repeated starts, SCDC/EDID reads, ownership, clock setup, explicit DONE,
+  bounded NACK/timeout/aborted handling and readback. A failed restoration
+  quarantines the context. Firmware preemption releases only our request,
+  without resetting another owner's transfer. AUX/software-routed pads are
+  rejected; a future connector adapter must establish the correct I2C routing.
+- SCDC monitor configuration at address 0x54, source/sink version, scrambling
+  and 1:40 clock ratio above 340 MHz, exact configuration readback, monitor
+  channel/clock-lock verification and restoration of prior settings.
+- Native HDMI RGB8 stream and AFMT stereo audio/ACR programming. Audio rates
+  are mathematically consistent with the supplied actual clock. Update strobes
+  are handled separately from stable fields; failed preparation rolls back.
+  Commit requires the native transmitter clock and enable state and controls
+  audio samples/AVMUTE. The parent must supply a verified AZALIA endpoint and
+  perform the actual PLL/PHY programming and HDA coordination.
+- Native fixed-rate frame-counter frequency measurement against a calibrated
+  clock, with wrap handling, bounds, timing stability and observation uncertainty.
+  Its result never uses an advertised or requested pixel clock. It runs at
+  takeover/modeset rather than blocking the compositor's ordinary poll.
+- A freestanding PIC link check retains the real native code bodies, forbids
+  imports/runtime relocations and includes local memory primitives. Its test
+  fixture rejects activation and is not a physical card module or download.
+
+Model checks passed: OTG 725 cases, native I2C plus SCDC 1,360 cases, HDMI/AFMT
+302 cases, frame-counter clock proof 78 cases, all also under the undefined-
+behavior sanitizer. These 2,465 cases check code and modeled register/protocol
+semantics; **they do not verify RX6600 hardware, an active 240 Hz mode, or HDMI
+sound**. The full five-card end state remains open. No new physical card binary
+or pin/catalog entry has been created from this partial backend.
+
 1. Connect actual physical card modules to the retained ABI2 loader and catalog.
 2. Implement AMD native display integration using the bounded ATOM executor, DCN302 scanout,
    display-clock management, connector discovery and DDC/SCDC/link setup for

@@ -1,0 +1,78 @@
+{
+  "passed": true,
+  "freestanding_pic_link": true,
+  "imports": false,
+  "runtime_relocations": false,
+  "native_code_symbols": {
+    "dcn302_clock_measure": {
+      "address": 12496,
+      "bytes": 3649
+    },
+    "dcn302_otg_program_disabled": {
+      "address": 6672,
+      "bytes": 2572
+    },
+    "dcn302_otg_enable": {
+      "address": 5296,
+      "bytes": 1198
+    },
+    "dcn302_otg_disable": {
+      "address": 4192,
+      "bytes": 1089
+    },
+    "dcn302_ddc_transfer": {
+      "address": 16160,
+      "bytes": 2982
+    },
+    "dcn302_hdmi_prepare": {
+      "address": 21760,
+      "bytes": 1704
+    },
+    "dcn302_hdmi_commit": {
+      "address": 23616,
+      "bytes": 376
+    },
+    "dcn302_hdmi_restore": {
+      "address": 20848,
+      "bytes": 234
+    },
+    "hdmi_scdc_configure": {
+      "address": 24272,
+      "bytes": 447
+    },
+    "hdmi_scdc_verify_link": {
+      "address": 24720,
+      "bytes": 323
+    },
+    "atom_vm_execute": {
+      "address": 27504,
+      "bytes": 290
+    },
+    "atom_vm_init": {
+      "address": 26560,
+      "bytes": 929
+    }
+  },
+  "fixture": {
+    "bytes": 41024,
+    "memory_bytes": 184320,
+    "sha256": "74d5cfb5cf99162165a8dcca23c504612930d351ccef815849bccf254cb27ae9"
+  },
+  "distributed": false,
+  "physical_card_driver": false,
+  "physical_hardware_verified": false,
+  "source_sha256": {
+    "tests/host/gpu_native_link_fixture.c": "0f25da4b0d0b73ae75f1ff05819d76632112deca9f4a22af0cb0ca480a1ec1ac",
+    "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
+    "tools/gpu-driver/amd/dcn302_clock.c": "cdf336a6825fb8b7b3320c02065e07a262fcce1f1677db3bdac4e35bceed1676",
+    "tools/gpu-driver/amd/dcn302_ddc.c": "fe79e511411d3731dcbb531103775aa715d624360eccb71f6f054a0238fbf6ea",
+    "tools/gpu-driver/amd/dcn302_hdmi.c": "77cc949ca997bd5635ac684cc868c8ce8ae42c6965846f1607b2ac775d9d9ed8",
+    "tools/gpu-driver/amd/hdmi_scdc.c": "00989b9bb9c256a3100cff2366b76a884a5a4acb62b437b5240dd41c1957edc4",
+    "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
+    "tools/gpu-driver/amd/atom_vm.c": "2bddbdd4084c1f7d5bf941b5cff1506cbe996d72f42dd21694aa28f90c38865a",
+    "tools/gpu-driver/common/memory.c": "a596316cccd05375498d4c44177f5b6a5a54503a8fb001f43a81804ada96ffdf",
+    "scripts/build_gpu_module_v2.py": "1d292081413da981a57d27c2b1b5b1ea223b56cbb03ee8ef82f72c007d4ff3e9",
+    "tools/gpu-driver/include/string.h": "c1bbca2f03195bf7842eee283c0b6668f7537705d435b77f2926d32138f72424",
+    "scripts/test_gpu_native_link.py": "0b16fa5c2e6808642f29be066740d7faa932901f566988d5e73e97529988d994"
+  }
+}

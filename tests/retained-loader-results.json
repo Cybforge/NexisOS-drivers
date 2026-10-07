@@ -13,7 +13,7 @@
     "kernel/drivers/gpu/runtime.c": "4f171800c5983dc77a3db4d20114333cda54fde758b3b60225f50d6d81fabfdd",
     "kernel/mm/vmm.c": "1dc546bd727ea30124ba2353e30dee407b0478f3675e18ace3d5245d78193b74",
     "tools/gpu-driver/include/nexis_gpu_v2.h": "363464a41d14fcc3ba3cdf1c0aecafef5bed9390d18085300b96c87a25fdc5a0",
-    "scripts/build_gpu_module_v2.py": "84bb01f7798e8210b9ad89af4c13e0dc04df57708c872f7961e783c77b32dcde",
+    "scripts/build_gpu_module_v2.py": "1d292081413da981a57d27c2b1b5b1ea223b56cbb03ee8ef82f72c007d4ff3e9",
     "tests/host/test_gpu_image.c": "2414cad05afc201b0ccbe411f1120ceba467256cba975837229ad99fa51a47c6",
     "tests/host/gpu_v2_fixture.c": "43676d4c443873ea2fe23a8b4b496367b54b42b3091df7bc0fe53cd03be53d2c"
   },

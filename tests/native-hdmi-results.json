@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "cases": 302,
+  "native_dcn302_hdmi_packets": true,
+  "physical_hdmi_audio_verified": false,
+  "full_rx6600_driver_complete": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_hdmi.c": "2d6ac9e5f16506c341597ba8222a2487e51d84b0744a05f9c467ce64b651ea8f",
+    "tools/gpu-driver/amd/dcn302_hdmi.c": "77cc949ca997bd5635ac684cc868c8ce8ae42c6965846f1607b2ac775d9d9ed8",
+    "tools/gpu-driver/amd/dcn302_hdmi.h": "d902932ae39c1da4bad1bc6995244fb413026dc5e9100542e1e8c2dba32c7bbe",
+    "tools/gpu-driver/amd/dcn302_hdmi_regs.h": "4cca37dbf4c742bab1e048086d6abdda6b506e41a93530c1464cc27c25f43fbb",
+    "scripts/generate_dcn302_hdmi_regs.py": "3f4e27e5e60fffdae68d1a400414e6577c3d9a96166880935640b62cf904ad74",
+    "scripts/generate_dcn302_regs.py": "2d2b541580ba8f6635ff5ca6591481c23893ea9ceba049f7d8b6b7c1a90413eb"
+  }
+}

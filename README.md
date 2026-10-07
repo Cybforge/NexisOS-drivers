@@ -7,6 +7,11 @@ Native physical-driver work is in progress. `kernel/drivers/audio/hdmi.c`
 contains an AMD `1002:aa01` stereo HDA codec helper, and `tools/gpu-driver/amd/`
 contains a bounded ATOM firmware parser and bytecode interpreter. EDID/connector mode policy
 and read-only UEFI ROM capture are also included as supporting source.
+The new DCN302 components implement native OTG timing/scanout register control,
+hardware DDC/I2C transactions, SCDC scrambling/link verification, HDMI/AFMT
+packet/audio clock setup and running frame-counter frequency measurement.
+They have register-model and freestanding PIC build checks. They are external
+backend components, without a complete RX6600 device/connector/clock/PHY adapter.
 These pieces do not yet initialize RX6600 scanout, set its display/link clocks,
 or establish HDMI transmission. See `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
@@ -46,6 +51,15 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 - `scripts/build_gpu_module_v2.py`: retained external module builder, rejects imports and runtime relocations.
 - `kernel/drivers/gpu/runtime.c`: retained module/scanout integration; activation requires hardware readback.
 - `tools/gpu-driver/amd/atom_vm.c`: bounded board-bytecode execution with explicit unsupported-operation errors.
+- `tools/gpu-driver/amd/dcn302_otg.c`: native Navi23 timing/VTG/OTG control; preserves the existing single OPP routing.
+- `tools/gpu-driver/amd/dcn302_ddc.c`: actual hardware I2C FIFO/arbitration transactions; firmware-owned transfers are not reset.
+- `tools/gpu-driver/amd/hdmi_scdc.c`: monitor scrambling/clock ratio configuration, readback, sink lock and rollback.
+- `tools/gpu-driver/amd/dcn302_hdmi.c`: native RGB8 HDMI/AFMT packet and stereo PCM48 ACR setup, AVMUTE and rollback.
+- `tools/gpu-driver/amd/dcn302_clock.c`: calibrated native frame-counter timing proof; no EDID/requested clock fallback.
+- `tools/gpu-driver/common/memory.c`: freestanding module memory primitives, without C library/kernel imports.
+- `scripts/generate_dcn302*_regs.py`: exact register subsets generated from checksum-pinned AMD Linux v6.12 source definitions.
+- `scripts/test_dcn302*.py`: native-code register models, transaction failures and undefined-behavior checks.
+- `scripts/test_gpu_native_link.py`: real native code linked as an import/relocation-free NDRV2 fixture. The fixture always rejects activation and is never distributed.
 - `tools/gpu-driver/module.ld`: image layout.
 - `scripts/build_gpu_modules.py`: reproducible Zig 0.13 compiler build, rejects imports/relocations/writable program globals, creates the module and kernel pin.
 - `kernel/drivers/gpu/`: NexisOS loader/cache integration. Call `gpu_packages_poll()` from the Store's idle job poll. The installer calls `gpu_prepare_install()` and saves `gpu_install_payload()` to `/opt/nexis-drivers/bochs.ndrv` in the installed root.

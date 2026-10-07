@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "cases": 725,
+  "native_dcn302_register_transaction": true,
+  "physical_modesetting_verified": false,
+  "full_rx6600_driver_complete": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302.c": "1cc5a6388db9f26c3e4d560e52f2632642d8848fe00b80e9ab9106fdf77e56cf",
+    "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
+    "tools/gpu-driver/amd/dcn302_otg.h": "e7ba1172e746f42d38983de191d462ff975a18eb07eecb886ffaa8e053f80148",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_regs.py": "2d2b541580ba8f6635ff5ca6591481c23893ea9ceba049f7d8b6b7c1a90413eb"
+  }
+}

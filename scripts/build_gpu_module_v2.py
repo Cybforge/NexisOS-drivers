@@ -8,7 +8,7 @@ def build(sources,output,vendor,device):
     zig=os.environ.get('NEXIS_ZIG') or shutil.which('zig') or str(Path.home()/'Desktop/AetherOS/tools/zig/zig-windows-x86_64-0.13.0/zig.exe')
     elf=output.with_suffix('.elf')
     subprocess.run([zig,'cc','-target','x86_64-freestanding','-O2','-Ddriver_init_v2=_start','-fPIE','-pie','-ffreestanding',
-                    '-mno-red-zone','-fno-stack-protector','-nostdlib','-Wl,-T,'+str(root/'tools/gpu-driver/module_v2.ld'),
+                    '-mno-red-zone','-fno-stack-protector','-nostdlib','-I'+str(root/'tools/gpu-driver/include'),'-Wl,-T,'+str(root/'tools/gpu-driver/module_v2.ld'),
                     *map(str,sources),'-o',str(elf)],check=True)
     data=elf.read_bytes();entry=struct.unpack_from('<Q',data,24)[0];off=struct.unpack_from('<Q',data,40)[0];ents,n,strings=struct.unpack_from('<HHH',data,58)
     sections=[struct.unpack_from('<IIQQQQIIQQ',data,off+i*ents) for i in range(n)]
