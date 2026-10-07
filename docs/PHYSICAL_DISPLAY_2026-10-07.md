@@ -7,6 +7,42 @@ RX6600, the highest supported monitor refresh rate, HDMI sound, and external
 device-matched download/persistent installation. **This end state is not yet
 implemented or verified.** Bochs/QEMU support does not count as a physical driver.
 
+## Latest external native code after r4
+
+The latest RX6600 candidate adds native DAL SMU mailbox initialization,
+protocol/version checks and actual supported UCLK/DCEFCLK/DISPCLK/DPPCLK/PHYCLK
+levels. It can send native acknowledged hard-minimum clock requests; these
+acknowledgments are not measured scanout frequencies. Pending/uncertain requests
+are quarantined instead of reset or blindly replayed. Probe makes firmware
+queries but does not change clock/power or display policy.
+
+The native DCN302 DFS/DTO transaction now reads the actual CLK02 PLL feedback
+multiplier and completed display/DPP divider states, including per-pipe DTOs.
+It quantizes clocks without undershooting the request, validates real owned
+SMU floors for both the old/new clock, requires all five OTG/VTG pipelines
+stopped and applies the native clock registers. Exact fixed-point PLL math
+avoids insufficient MHz voltage floors at fractional clock boundaries. A
+rollback is allowed only after stable completed native readback; unresolved
+requests or failed rollback leave the transaction poisoned and pipelines off.
+Display divider 127 transitions and buffered DTO configurations remain explicit
+unsupported states until their native FIFO/buffering handling is implemented.
+
+Both operations are integrated into the retained RX6600 module code. Clock
+floors cannot be lowered below its programmed clocks or outstanding rollback
+requirements. The PIC tests retain two allocations simultaneously and verify
+distinct actual addresses, then execute native SMU floors and display-clock
+apply/restore after module entry returns. These are development operations,
+not Store commands. The normal set_mode still rejects a changed video mode.
+
+Current checks: SMU 194 cases, DFS/DTO 1,410 cases, retained RX6600 212 cases;
+all pass with warnings treated as errors and the undefined-behavior sanitizer.
+The RX6600 candidate is 45,120 bytes with 49,152-byte retained memory, no imports
+or runtime relocations. The MMIO/firmware responses are modeled, not physical
+hardware evidence. Full bandwidth/DLG/TTU, pixel PLL/PHY, complete link rollback
+and AZALIA/HDA audio coordination remain required, as do the other four card
+backends. The candidate stays outside the catalog and is not embedded in the
+unchanged r4 ISOs. No new physical-driver ISO has been delivered by this increment.
+
 ## Completed work in this build
 
 - Retained ABI2 now exposes independently verified, read-only PCI resource
@@ -20,7 +56,7 @@ implemented or verified.** Bochs/QEMU support does not count as a physical drive
   native DIG/FE/OTG/OPP route, HUBP/GOP VRAM translation and measured frame clock.
   read_mode/poll/shutdown run after entry returns. Changed routing, surfaces,
   PCI resources, hotplug and abnormal frame progression invalidate the output.
-  192 host cases execute both normal and genuinely loaded PIC callbacks, also
+  At the r4 checkpoint, 192 host cases executed normal and loaded PIC callbacks, also
   with UB sanitizer. This is a **development candidate, not a completed or
   distributed driver**: set_mode only verifies an unchanged running mode.
   Clock-changing modesetting, memory bandwidth, PHY and audio remain required.

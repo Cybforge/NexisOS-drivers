@@ -1,36 +1,55 @@
 {
   "passed": true,
-  "cases": 192,
+  "cases": 212,
   "native_rx6600_retained_backend": true,
   "real_pic_callbacks_executed": true,
+  "distinct_pic_bases_verified": true,
+  "native_smu_probe_integrated": true,
+  "real_pic_clock_floor_command_executed": true,
+  "real_pic_display_clock_transaction_executed": true,
   "mode_changing_transaction_complete": false,
-  "hardware_writes": false,
+  "firmware_mailbox_writes": true,
+  "clock_floor_changes_modeled": true,
+  "display_clock_writes_modeled": true,
   "physical_hardware_verified": false,
   "undefined_behavior_sanitizer_passed": true,
   "candidate": {
-    "bytes": 32832,
-    "memory_bytes": 36864,
+    "bytes": 45120,
+    "memory_bytes": 49152,
     "services_bytes": 112,
-    "sha256": "e6815a3f97a80ead655e448ad612a475f2cc1ea3b025c76aea304ddb532339b9"
+    "sha256": "696c9dca8db2dac0d01334e578031cac1ecaf911f7fc2f8f225088739d273ed3"
   },
   "distributed": false,
   "full_rx6600_driver_complete": false,
   "physical_gpu_drivers_complete": 0,
+  "native_pic_floor_command_symbol": {
+    "address": 4016,
+    "bytes": 529
+  },
+  "native_pic_display_clock_command_symbol": {
+    "address": 4560,
+    "bytes": 2295
+  },
   "source_sha256": {
-    "tests/host/test_rx6600.c": "9473761f3bf757cd0171907ca79c45d69e352bccb98901e8dac047f514b23510",
+    "tests/host/test_rx6600.c": "48881c46e37fc059d2c28bec6bef9aeba4e4b8b960f8ea1800ab3eab55e6b4b4",
     "kernel/drivers/gpu/module_image.c": "8819b93bfd4728b51a287180b645b8dc38823a3b57d8a1afc55f3fb42cdac4bd",
     "tools/gpu-driver/amd/rx6600_module.c": "3e2f40d34570ac735a727fae6721acf66b44afa3069fe9dae6a979a00961da60",
-    "tools/gpu-driver/amd/rx6600.c": "1becffae8584bf274826febd16f45f1ff50354abc084cf73a46e885bc03a8189",
+    "tools/gpu-driver/amd/rx6600.c": "908a2d8a59b7d04005a01a944cfd4e8b848b6bc6b691322da3a3fb7b50428c04",
     "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
     "tools/gpu-driver/amd/atom_board.c": "67319d25f3444eddf1927afdb9ca1b47a54a9a1c8dc0fe40217238c02716d605",
     "tools/gpu-driver/amd/dcn302_route.c": "9834de414a627436b0f2e2c457cb00e6b65d0a1decc9e6ca38d23d60c2a90290",
     "tools/gpu-driver/amd/dcn302_surface.c": "54a2a36deef1f8113419ed91deb73476d3cea286769510b4f41b266860cc3816",
     "tools/gpu-driver/amd/dcn302_otg.c": "2a128212dace26a426e9817c1eee445712e2d5e6c8b464be2a8d25943949438c",
     "tools/gpu-driver/amd/dcn302_clock.c": "cdf336a6825fb8b7b3320c02065e07a262fcce1f1677db3bdac4e35bceed1676",
-    "tools/gpu-driver/amd/rx6600.h": "0db06fd36ec40414225163a7044386014182b1746b08cbde3d790a2a1a1d9008",
+    "tools/gpu-driver/amd/dcn302_smu.c": "42520c19aa35fece72a1ea849774bbf0597490965fdd310a7275c4be811e1a43",
+    "tools/gpu-driver/amd/dcn302_dfs.c": "9e88466cf970ecae9ffcacd9dceb033649fd58dde99fb45bb8e0c4e7783e4357",
+    "tools/gpu-driver/amd/rx6600.h": "9e34223a71418700e0763cb363e78df2e0540becc4496549252a28529924ef60",
+    "tools/gpu-driver/amd/dcn302_smu.h": "cdc250db28b020920c8637a9d2627b8ba973e30a329eacc2e69fa51faf014429",
+    "tools/gpu-driver/amd/dcn302_dfs.h": "b39f4f05b927b7f64a7ed07fde719ab87d5d8f124ac2fb1bd6596aa42eaba763",
+    "tools/gpu-driver/amd/dcn302_dfs_regs.h": "e12e8e696966d091764eb5aa292fe08ff3533834bb819f8af58f64962d44a752",
     "tools/gpu-driver/common/memory.c": "a596316cccd05375498d4c44177f5b6a5a54503a8fb001f43a81804ada96ffdf",
     "tools/gpu-driver/include/nexis_gpu_v2.h": "b10b7d226ec0e6831eca0b6daec63526762761acc88b474c64b8810f62aa8871",
     "scripts/build_gpu_module_v2.py": "75b35d8bf17eb301586642eb65d4088f8d800635bf358da8117d4b654e2036c9",
-    "scripts/test_rx6600.py": "d1bf404f7d88a3a364484fd1439f2fb1c1d32e25b99854b655655375a410963b"
+    "scripts/test_rx6600.py": "91fe9e5a642de75ad5ab9e831a57d9958e7d9c3a9e2148ce9be225f58510cee7"
   }
 }

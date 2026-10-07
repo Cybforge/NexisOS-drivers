@@ -18,7 +18,13 @@ They have register-model and freestanding PIC build checks. They are external
 backend components. The new retained RX6600 adapter connects real ROM wiring,
 native routing, VRAM surface proof and measured hardware timing, with read/poll/
 shutdown callbacks. Its external PIC candidate executes in host register-model
-checks. Mode-changing clock/PHY/bandwidth and HDMI audio transactions are still
+checks at two verified distinct addresses. The native DAL SMU protocol now
+queries supported clocks and sends acknowledged clock-floor requests. The
+native DFS/DTO transaction reads the real PLL/dividers, quantizes clocks,
+requires all five pipelines stopped and adequate owned SMU floors, and applies
+and restores actual display/DPP clock registers. Uncertain pending requests
+are not replayed; exact fractional PLL math protects voltage-floor rounding.
+Full bandwidth/DLG, pixel PLL/PHY and coordinated HDMI audio modesetting remain
 pending; it is not a complete card driver or catalog package. See
 `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
@@ -67,6 +73,8 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 - `tools/gpu-driver/amd/hdmi_scdc.c`: monitor scrambling/clock ratio configuration, readback, sink lock and rollback.
 - `tools/gpu-driver/amd/dcn302_hdmi.c`: native RGB8 HDMI/AFMT packet and stereo PCM48 ACR setup, AVMUTE and rollback.
 - `tools/gpu-driver/amd/dcn302_clock.c`: calibrated native frame-counter timing proof; no EDID/requested clock fallback.
+- `tools/gpu-driver/amd/dcn302_smu.c`: actual native DAL mailbox, version/clock-limit checks, acknowledged clock floors and uncertain-request quarantine.
+- `tools/gpu-driver/amd/dcn302_dfs.c`: native PLL/divider/DTO readback and stopped-pipeline display/DPP clock transaction with verified rollback and voltage-floor checks.
 - `tools/gpu-driver/common/memory.c`: freestanding module memory primitives, without C library/kernel imports.
 - `scripts/generate_dcn302*_regs.py`: exact register subsets generated from checksum-pinned AMD Linux v6.12 source definitions.
 - `scripts/test_dcn302*.py`: native-code register models, transaction failures and undefined-behavior checks.

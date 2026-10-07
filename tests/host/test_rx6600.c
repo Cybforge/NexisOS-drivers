@@ -11,7 +11,9 @@ static unsigned cases;
 typedef struct {
     uint8_t rom[2048];uint32_t otg[5][DCN302_REGISTER_COUNT],dig[5][DCN302_HDMI_REGISTER_COUNT],surface[5][DCN302_SURFACE_REGISTER_COUNT],hpd[5];
     uint32_t fb_base,fb_top,fb_offset,period;
-    uint64_t time;unsigned reads,writes,queries,fail_read,fail_query;
+    uint32_t dfs_pll,dfs_dentist,dfs_control,dfs_dto[5];
+    uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
+    uint64_t time;unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
     bool frozen,invalid;
     nexis_gpu_resource vram,registers;
 } model;
@@ -36,6 +38,12 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
 }
 static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *out){
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
+    if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
+    if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
+    if(offset==DCN302_DFS_PLL_BYTES){*out=m->dfs_pll;return true;}
+    if(offset==DCN302_DFS_DENTIST_BYTES){*out=m->dfs_dentist;return true;}
+    if(offset==DCN302_DFS_DTO_CTRL_BYTES){*out=m->dfs_control;return true;}
+    for(unsigned i=0;i<5;i++)if(offset==dcn302_dfs_dto_bytes[i]){*out=m->dfs_dto[i];return true;}
     for(unsigned i=0;i<5;i++){
         for(unsigned r=0;r<DCN302_REGISTER_COUNT;r++)if(offset==dcn302_register_bytes[i][r]){
             *out=r==DCN302_R_FRAME_COUNT?(uint32_t)(m->time/m->period)&DCN302_FRAME_COUNT_MASK:m->otg[i][r];return true;
@@ -48,15 +56,41 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
     if(offset==DCN302_FB_OFFSET_BYTES){*out=m->fb_offset;return true;}
     m->invalid=true;return false;
 }
-static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){model *m=ctx;(void)bar;(void)offset;(void)value;m->writes++;return false;}
+static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
+    model *m=ctx;CHECK(bar==5);
+    if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
+    if(offset==DCN302_SMU_ARGUMENT_BYTES){m->smu_writes++;m->smu_argument=value;return true;}
+    if(offset==DCN302_SMU_MESSAGE_BYTES){
+        m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);unsigned clock=m->smu_argument>>16,index=m->smu_argument&0xff;
+        uint32_t result=0;
+        if(m->smu_status==1)switch(value){
+            case 1:result=m->smu_argument+1;break;case 2:result=m->smu_version;break;
+            case 3:result=m->smu_interface;break;case 4:result=m->smu_header;break;
+            case 11:CHECK(clock==2 || (clock>=8 && clock<=11));result=index==255?m->smu_features:index==0?100:index==1?600:2000;break;
+            case 9:CHECK(clock==2 || (clock>=8 && clock<=11));result=m->smu_argument&0xffff;m->smu_floor=result;m->smu_clock_requests++;break;
+            default:m->invalid=true;return false;
+        }
+        m->smu_response=m->smu_status;m->smu_argument=result;return true;
+    }
+    m->writes++;
+    for(unsigned i=0;i<5;i++)CHECK(!(m->otg[i][DCN302_R_CONTROL]&(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK)) && !(m->otg[i][DCN302_R_VTG]&DCN302_VTG_ENABLE_MASK));
+    if(offset==DCN302_DFS_DENTIST_BYTES){
+        m->dfs_dentist=(value&~DCN302_DFS_DISP_READ_MASK)|((value&127)<<8)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;return true;
+    }
+    if(offset==DCN302_DFS_DTO_CTRL_BYTES){m->dfs_control=value;return true;}
+    for(unsigned i=0;i<5;i++)if(offset==dcn302_dfs_dto_bytes[i]){m->dfs_dto[i]=value;return true;}
+    m->invalid=true;return false;
+}
 static bool NEXIS_GPU_CALL resource(void *ctx,unsigned bar,nexis_gpu_resource *out){
     model *m=ctx;memset(out,0,sizeof(*out));if(++m->queries==m->fail_query)return false;
     if(bar==0)*out=m->vram;else if(bar==5)*out=m->registers;else return false;return true;
 }
-static bool NEXIS_GPU_CALL delay(void *ctx,uint32_t us){model *m=ctx;CHECK(us==1);if(!m->frozen)m->time+=us;return true;}
+static bool NEXIS_GPU_CALL delay(void *ctx,uint32_t us){model *m=ctx;CHECK(us==1 || us==10);if(!m->frozen)m->time+=us;return true;}
 static uint64_t NEXIS_GPU_CALL now(void *ctx){return ((model *)ctx)->time;}
 static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,unsigned pipe,unsigned bus,unsigned hpd,unsigned opp,unsigned mpcc,unsigned hubp,unsigned format){
     memset(m,0,sizeof(*m));memset(k,0,sizeof(*k));rom_init(m,link,bus,hpd);m->period=4166;
+    m->smu_response=m->smu_status=1;m->smu_version=0x3a0100;m->smu_header=1;m->smu_interface=0x40;m->smu_features=3;
+    m->dfs_pll=36|0x80000000u;m->dfs_dentist=24|(24u<<8)|(24u<<24)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;
     *k=(nexis_gpu_services){.abi=2,.size=112,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
         .framebuffer=0x800200000ULL,.framebuffer_bytes=2048u*4*1080,.rom=m->rom,.rom_bytes=2048,.service_context=m,
         .read32=rd,.write32=wr,.time_us=now,.delay_us=delay,.resource=resource};
@@ -84,6 +118,7 @@ static void normal(void){
     for(unsigned pipe=0;pipe<5;pipe++)for(unsigned link=0;link<5;link++)for(unsigned format=0;format<2;format++){
         init(&m,&k,link,(pipe+2)%5,pipe,(link+1)%5,(pipe+3)%5,(pipe+1)%5,(link+2)%5,(link+4)%5,format);
         CHECK(rx6600_probe(&s,&k)==RX6600_OK && s.ready && !s.busy);
+        CHECK(s.smu.ready && s.smu.clocks[2].valid && s.smu.clocks[8].valid && s.smu.clocks[9].valid && s.smu.clocks[10].valid && s.smu.clocks[11].valid && m.smu_triggers==24 && !m.smu_clock_requests);
         CHECK(rx6600_read_mode(&s,&out) && out.framebuffer==k.framebuffer && out.pitch==2048 && out.format==format && out.flags==11 && out.timing.pixel_khz>558000);
         CHECK(rx6600_set_mode(&s,&out.timing));nexis_gpu_timing changed=out.timing;changed.pixel_khz=148500;
         CHECK(!rx6600_set_mode(&s,&changed) && s.error==RX6600_MODESET_PENDING && s.ready && !m.writes);
@@ -93,7 +128,7 @@ static void normal(void){
 }
 static void failures(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out,zero={0};
-    for(unsigned fault=0;fault<17;fault++){
+    for(unsigned fault=0;fault<24;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);
         switch(fault){
             case 0:k.size=104;break;case 1:k.vendor=0x10de;break;case 2:k.device=0x73df;break;case 3:k.resource=NULL;break;
@@ -102,6 +137,8 @@ static void failures(void){
             case 10:m.hpd[1]=0;break;case 11:m.otg[3][DCN302_R_CONTROL]=0;break;
             case 12:m.surface[1][DCN302_SURFACE_R_PITCH]++;break;case 13:m.frozen=true;break;
             case 14:k.pitch=1919;break;case 15:k.format=2;break;case 16:m.period=2000;break;
+            case 17:k.write32=NULL;break;case 18:m.smu_version=0;break;case 19:m.smu_interface=0x3f;break;
+            case 20:m.smu_header=2;break;case 21:m.smu_features=0;break;case 22:m.smu_status=0xfe;break;case 23:m.smu_response=0xab;break;
         }
         CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !s.busy && !m.writes);
         memset(&out,0xa5,sizeof(out));CHECK(!rx6600_read_mode(&s,&out) && !memcmp(&out,&zero,sizeof(out)));cases++;
@@ -112,7 +149,7 @@ static void failures(void){
     for(unsigned op=1;op<=4;op++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);m.fail_query=op;CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !m.writes);cases++;
     }
-    for(unsigned fault=0;fault<13;fault++){
+    for(unsigned fault=0;fault<20;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);
         switch(fault){
             case 0:m.vram.bytes/=2;break;case 1:m.registers.base+=4096;break;case 2:m.hpd[1]=0;break;
@@ -122,6 +159,9 @@ static void failures(void){
             case 9:m.fail_read=m.reads+1;break;
             case 10:m.otg[3][DCN302_R_V_CONTROL]|=DCN302_V_MIN_SELECT_MASK;break;
             case 11:m.otg[3][DCN302_R_V_MIN]++;break;case 12:m.otg[3][DCN302_R_V_MAX]++;break;
+            case 13:s.smu.poisoned=true;break;case 14:s.smu.ready=false;break;
+            case 15:m.dfs_pll++;break;case 16:m.dfs_dentist&=~DCN302_DFS_DPP_DONE_MASK;break;
+            case 17:m.dfs_control|=2;break;case 18:m.dfs_dto[1]=1;break;case 19:m.dfs_dentist^=1u<<24;break;
         }
         memset(&out,0xa5,sizeof(out));CHECK(!rx6600_read_mode(&s,&out) && !memcmp(&out,&zero,sizeof(out)) && !s.ready && !s.busy && !m.writes);cases++;
     }
@@ -129,27 +169,52 @@ static void failures(void){
     CHECK(!rx6600_read_mode(&s,&out) && s.ready);rx6600_poll(&s);CHECK(s.ready);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);m.hpd[1]=0;rx6600_poll(&s);CHECK(!s.ready);cases++;
 }
-static void retained(nexis_gpu_entry_v2 entry){
+typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
+static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address){
     model m;nexis_gpu_services k;nexis_gpu_instance out;nexis_gpu_scanout mode;
     init(&m,&k,4,0,3,2,1,2,4,1,1);memset(&out,0xa5,sizeof(out));CHECK(entry(&k,&out)==0 && out.abi==2 && out.size==sizeof(out));
     CHECK(out.read_mode && out.set_mode && out.poll && out.shutdown && out.state && out.state_bytes && out.hdmi && out.scdc);
     CHECK(out.read_mode(out.state,&mode) && mode.flags==11 && !(mode.flags&NEXIS_GPU_SCANOUT_AUDIO));
+    rx6600_state *native=out.state;uint32_t acknowledged=0;
+    CHECK(!native->smu.floor_known[2] && !m.smu_clock_requests);
+    if(floor_address)CHECK((uintptr_t)native->clock_floor==floor_address);
+    bool floor_ok=floor_address?((pic_floor)floor_address)(native,DCN302_SMU_UCLK,558,&acknowledged):native->clock_floor(native,DCN302_SMU_UCLK,558,&acknowledged);
+    CHECK(floor_ok && acknowledged==558 && m.smu_clock_requests==1 && m.smu_floor==558 && native->smu.floor_known[2] && native->smu.floor_mhz[2]==558);cases++;
+    if(dfs_address)CHECK((uintptr_t)native->display_clocks==dfs_address);
+    CHECK(native->dfs.valid && native->dfs.disp_khz==608333 && native->dfs.dpp_khz==608333);
+    dcn302_dfs_request r={.disp_khz=700000,.dpp_khz=700000,.pipe_khz={0,700000,0,0,0}};
+    CHECK(native->display_clocks(native,&r,RX6600_DFS_PREPARE) && native->dfs_transaction.prepared && !m.writes);
+    CHECK(!native->display_clocks(native,NULL,RX6600_DFS_APPLY) && !m.writes);
+    CHECK(native->clock_floor(native,DCN302_SMU_DISPCLK,native->dfs_transaction.required_disp_floor_mhz,&acknowledged));
+    CHECK(native->clock_floor(native,DCN302_SMU_DPPCLK,native->dfs_transaction.required_dpp_floor_mhz,&acknowledged));
+    CHECK(!native->display_clocks(native,NULL,RX6600_DFS_APPLY) && !m.writes && !native->dfs_transaction.dirty);
+    uint32_t control=m.otg[3][DCN302_R_CONTROL];m.otg[3][DCN302_R_CONTROL]=0;
+    CHECK(native->display_clocks(native,NULL,RX6600_DFS_APPLY) && m.writes>=2 && native->dfs_transaction.applied && native->dfs.disp_khz==730000 && native->dfs.dpp_khz==730000);
+    unsigned triggers=m.smu_triggers;
+    CHECK(!native->clock_floor(native,DCN302_SMU_DISPCLK,729,&acknowledged) && !acknowledged && m.smu_triggers==triggers);
+    CHECK(!native->clock_floor(native,DCN302_SMU_DPPCLK,729,&acknowledged) && !acknowledged && m.smu_triggers==triggers);
+    CHECK(native->display_clocks(native,NULL,RX6600_DFS_RESTORE) && !native->dfs_transaction.dirty && native->dfs.disp_khz==608333 && native->dfs.dpp_khz==608333);
+    CHECK(!native->display_clocks(native,NULL,(enum rx6600_dfs_operation)-1));m.otg[3][DCN302_R_CONTROL]=control;
+    unsigned completed_writes=m.writes;CHECK(completed_writes && m.smu_clock_requests==3 && native->ready && !native->busy);cases++;
     m.time+=500000;out.poll(out.state);CHECK(out.read_mode(out.state,&mode) && out.set_mode(out.state,&mode.timing));
-    mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && !m.writes && !m.invalid);cases++;
+    mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);k.size=104;memset(&out,0xa5,sizeof(out));nexis_gpu_instance zero={0};
     CHECK(entry(&k,&out)==RX6600_INPUT && !memcmp(&out,&zero,sizeof(out)) && !m.reads && !m.writes);cases++;
 }
-static void pic(const char *path){
+static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset){
     FILE *f=fopen(path,"rb");CHECK(f);CHECK(!fseek(f,0,SEEK_END));long length=ftell(f);CHECK(length>64);rewind(f);
     uint8_t *data=malloc((size_t)length);CHECK(data && fread(data,1,(size_t)length,f)==(size_t)length);fclose(f);
     nexis_gpu_image m;CHECK(nexis_gpu_image_parse(data,(size_t)length,0x1002,0x73ff,&m));
+    CHECK(floor_offset<m.text_bytes && dfs_offset<m.text_bytes);
+    uint8_t *bases[2];
     for(unsigned n=0;n<2;n++){
-        uint8_t *base=VirtualAlloc(NULL,m.memory_bytes,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);CHECK(base);memcpy(base,data+64,m.image_bytes);DWORD old;
+        bases[n]=VirtualAlloc(NULL,m.memory_bytes,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE);uint8_t *base=bases[n];CHECK(base && (!n || base!=bases[0]));memcpy(base,data+64,m.image_bytes);DWORD old;
         unsigned code=(m.text_bytes+4095)&~4095u;CHECK(VirtualProtect(base,code,PAGE_EXECUTE_READ,&old));
         if(code<m.writable_offset)CHECK(VirtualProtect(base+code,m.writable_offset-code,PAGE_READONLY,&old));
-        retained((void *)(base+m.entry));CHECK(VirtualFree(base,0,MEM_RELEASE));
+        retained((void *)(base+m.entry),(uintptr_t)(base+floor_offset),(uintptr_t)(base+dfs_offset));
     }
+    for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==2);normal();failures();retained(driver_init_v2);pic(argv[1]);
-    printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"mode_changing_transaction_complete\":false,\"hardware_writes\":false,\"physical_hardware_verified\":false}\n",cases);return 0;}
+int main(int argc,char **argv){CHECK(argc==4);normal();failures();retained(driver_init_v2,0,0);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10));
+    printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

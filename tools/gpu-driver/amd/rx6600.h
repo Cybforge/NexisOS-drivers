@@ -2,7 +2,10 @@
 #define NEXIS_RX6600_H
 #include "dcn302_surface.h"
 #include "dcn302_clock.h"
-enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING};
+#include "dcn302_smu.h"
+#include "dcn302_dfs.h"
+enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
+enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING,RX6600_SMU};
 typedef struct {
     const nexis_gpu_services *services;
     dcn302_io io;
@@ -10,6 +13,13 @@ typedef struct {
     dcn302_route route;
     dcn302_surface surface;
     dcn302_clock_measurement clock;
+    dcn302_smu smu;
+    dcn302_dfs_snapshot dfs;
+    dcn302_dfs_transaction dfs_transaction;
+    /* Retained native clock operation for the modeset transaction. The module
+     * entry/probe does not invoke it; it is not a terminal/Store control. */
+    bool (NEXIS_GPU_CALL *clock_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
+    bool (NEXIS_GPU_CALL *display_clocks)(void *,const dcn302_dfs_request *,enum rx6600_dfs_operation);
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
     uint64_t sampled_us;uint32_t sampled_frame;
@@ -17,8 +27,11 @@ typedef struct {
     enum rx6600_error error;
 } rx6600_state;
 /* Native RX6600 retained backend under construction. Probe/read/poll use real
- * PCI/ATOM/DCN state and perform no GPU writes. A changed mode currently fails
- * explicitly until the clock/PHY/bandwidth transaction is implemented. This
+ * PCI/ATOM/DCN state. Probe queries the native SMU mailbox and actual supported
+ * clock levels and completed DFS/DTO clocks; it does not change display or
+ * clock/power policy. Retained internal clock operations execute native SMU
+ * floor and disabled-pipeline DFS/DTO transactions. A changed mode currently
+ * fails explicitly until the PHY/bandwidth/pixel-PLL transaction is implemented. This
  * is not a completed card driver and must not enter the download catalog yet. */
 enum rx6600_error rx6600_probe(rx6600_state *,const nexis_gpu_services *);
 bool rx6600_read_mode(rx6600_state *,nexis_gpu_scanout *);
