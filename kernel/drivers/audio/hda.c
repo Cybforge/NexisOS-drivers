@@ -531,6 +531,19 @@ bool hda_init(void) {
     return false;
 }
 
+/* True while the active output is an HDMI sink (as opposed to the analog codec). */
+bool hda_is_hdmi(void) { return H.ready && H.digital; }
+
+/* A native GPU driver just switched its HDMI audio endpoint on: look for the HDMI codec again. The normal
+ * init order (HDMI sink first, analog fallback) applies, so a monitor without audio leaves analog output
+ * working. Returns true only if the output now is HDMI. The caller makes sure no PCM block is in flight. */
+bool hda_rescan_hdmi(void) {
+    if (H.ready && H.digital) return true;
+    H.ready = false;           /* hda_init() retires the current controller and starts over */
+    bool ok = hda_init();
+    return ok && H.digital;
+}
+
 void hda_set_volume(uint8_t vol_percent) {
     if (vol_percent > 100) vol_percent = 100;
     H.volume = vol_percent;

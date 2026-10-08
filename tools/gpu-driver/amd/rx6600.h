@@ -11,11 +11,15 @@
 #include "dcn302_timing.h"
 #include "dcn302_dpp.h"
 #include "atom_display_commands.h"
+#include "dcn302_pixel_resync.h"
+#include "dcn302_ddc.h"
+#include "hdmi_scdc.h"
+#include "dcn302_audio.h"
 enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
 enum rx6600_hubp_operation {RX6600_HUBP_PREPARE,RX6600_HUBP_BLANK,RX6600_HUBP_APPLY,RX6600_HUBP_RESTORE,RX6600_HUBP_CANCEL};
 enum rx6600_timing_operation {RX6600_TIMING_APPLY,RX6600_TIMING_RESTORE};
 enum rx6600_dpp_operation {RX6600_DPP_APPLY,RX6600_DPP_RESTORE};
-enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING,RX6600_SMU,RX6600_MEMORY,RX6600_BANDWIDTH};
+enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING,RX6600_SMU,RX6600_MEMORY,RX6600_BANDWIDTH,RX6600_MODESET_FAILED,RX6600_MODESET_POISONED};
 typedef struct {
     const nexis_gpu_services *services;
     dcn302_io io;
@@ -65,6 +69,21 @@ typedef struct {
      * After writes, dependencies remain retained until the future full
      * modeset/old-mode rollback proves hardware state; no silent release. */
     enum atom_vm_error (NEXIS_GPU_CALL *firmware_command)(void *,enum atom_display_command,uint32_t,unsigned);
+    /* Mode switch (rx6600_modeset.c). All of these are retained across calls. */
+    dcn302_pixel_resync_transaction resync;
+    dcn302_hdmi_transaction hdmi;
+    dcn302_ddc ddc;
+    hdmi_scdc_snapshot scdc;
+    dcn302_audio_transaction audio_tx;
+    nx_audio_caps audio_caps;
+    /* Monitor register access (SCDC, address 0x54). Defaults to the connector's DDC engine; replaceable for tests. */
+    bool (*sink_read)(void *,uint8_t address,uint8_t offset,uint8_t *);
+    bool (*sink_write)(void *,uint8_t address,uint8_t offset,uint8_t);
+    bool fw_baseline;   /* firmware commands run against the restored baseline instead of an applied new mode */
+    bool in_modeset;    /* read_mode/poll stand aside while a mode switch is running */
+    bool sequence_proven; /* the full sequence already ran once for the current mode (self-test) */
+    bool audio_active;  /* AFMT audio packets are being sent (reported as NEXIS_GPU_SCANOUT_AUDIO) */
+    uint32_t modeset_count;
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
     uint64_t sampled_us;uint32_t sampled_frame;
@@ -89,6 +108,23 @@ typedef struct {
  * activation remain incomplete. This is not a completed card driver and
  * must not enter the download catalog yet. */
 enum rx6600_error rx6600_probe(rx6600_state *,const nexis_gpu_services *);
+/* Full native mode switch with rollback (rx6600_modeset.c). Returns true when the
+ * hardware runs the requested timing with a measured pixel clock. On any failure the
+ * previous mode is restored; if even that fails the output stays off and the state is
+ * marked not ready. */
+bool rx6600_modeset(rx6600_state *,const nexis_gpu_timing *);
+/* Used by the mode switch to keep the guarded firmware path valid while restoring the old mode. */
+bool rx6600_baseline_clean(rx6600_state *);
+/* After a successful switch the applied transactions become the new baseline. */
+void rx6600_commit_baseline(rx6600_state *);
+/* Re-read routing/surface/clock/fixed-rate state after the hardware mode changed. */
+bool rx6600_refresh_after_modeset(rx6600_state *,const nexis_gpu_timing *measured_shape);
+/* Parent guard for transactions that need the new fetch/WM/DPP state installed. */
+bool rx6600_new_mode_guard(void *);
+/* Re-baseline the liveness sampling after the pipeline was stopped and restarted. */
+void rx6600_resample(rx6600_state *);
+/* True when routing/surface/clock proofs still hold (display running, nothing changed behind our back). */
+bool rx6600_still_valid(rx6600_state *);
 bool rx6600_read_mode(rx6600_state *,nexis_gpu_scanout *);
 bool rx6600_set_mode(rx6600_state *,const nexis_gpu_timing *);
 void rx6600_poll(rx6600_state *);

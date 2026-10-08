@@ -1,4 +1,5 @@
 #include "rx6600.h"
+#include "../common/nxlog.h"
 #include <string.h>
 static bool read_reg(void *context,uint32_t offset,uint32_t *value){
     rx6600_state *s=context;return s->services->read32(s->services->service_context,5,offset,value);
@@ -10,6 +11,8 @@ static bool delay(void *context,uint32_t us){rx6600_state *s=context;return s->s
 static uint64_t now(void *context){rx6600_state *s=context;return s->services->time_us(s->services->service_context);}
 static enum rx6600_error fail(rx6600_state *s,enum rx6600_error error){s->ready=false;s->error=error;return error;}
 static bool resources(rx6600_state *);
+static bool sink_read_ddc(void *context,uint8_t address,uint8_t offset,uint8_t *value){return dcn302_ddc_read_byte(&((rx6600_state *)context)->ddc,address,offset,value);}
+static bool sink_write_ddc(void *context,uint8_t address,uint8_t offset,uint8_t value){return dcn302_ddc_write_byte(&((rx6600_state *)context)->ddc,address,offset,value);}
 static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock,uint32_t mhz,uint32_t *out){
     if(!out)return false;
     *out=0;rx6600_state *s=context;
@@ -150,8 +153,22 @@ static bool firmware_fault(rx6600_state *s,enum atom_vm_error e){
     if(s->firmware_changed)s->firmware_poisoned=true;
     return false;
 }
+/* Baseline = every transaction is back at (or was never moved from) the original hardware state. The guarded
+ * firmware path then only needs the parent proofs that do not depend on installed new-mode registers. */
+bool rx6600_baseline_clean(rx6600_state *s){
+    if(!s || !s->services || !resources(s) || !s->smu.ready || s->smu.busy || s->smu.poisoned)return false;
+    if(s->hubp_transaction.dirty || s->hubp_transaction.applied || s->hubp_transaction.poisoned ||
+       s->hubbub_transaction.dirty || s->hubbub_transaction.applied || s->hubbub_transaction.poisoned ||
+       s->dpp_transaction.dirty || s->dpp_transaction.applied || s->dpp_transaction.poisoned ||
+       s->timing_transaction.dirty || s->timing_transaction.applied || s->timing_transaction.poisoned ||
+       s->dfs_transaction.dirty || s->dfs_transaction.applied || s->dfs_transaction.poisoned ||
+       s->resync.dirty || s->resync.applied || s->resync.poisoned)return false;
+    dcn302_dfs_snapshot dfs;dcn302_reference ref;
+    return !dcn302_dfs_read(&s->io,&dfs) && !memcmp(&dfs,&s->dfs,sizeof(dfs)) &&
+        !dcn302_reference_read(&s->io,s->board.reference_khz,&ref) && dcn302_reference_equal(&ref,&s->reference);
+}
 static bool firmware_guard(rx6600_state *s){
-    if(s->firmware_poisoned || !timing_guard(s))return false;
+    if(s->firmware_poisoned || !(s->fw_baseline?rx6600_baseline_clean(s):timing_guard(s)))return false;
     for(unsigned sweep=0;sweep<2;sweep++){
         for(unsigned p=0;p<5;p++){
             uint32_t c,k,v;
@@ -206,8 +223,8 @@ static bool firmware_delay(void *context,uint32_t us){
 }
 static enum atom_vm_error NEXIS_GPU_CALL firmware_command(void *context,enum atom_display_command command,uint32_t khz,unsigned action){
     rx6600_state *s=context;
-    if(!s || !s->services || !s->ready || s->busy || s->firmware_poisoned || !s->dpp_transaction.applied ||
-       s->route.path>=s->board.count || (khz!=s->timing_transaction.timing.pixel_khz && khz!=s->clock.pixel_khz))return ATOM_VM_INPUT;
+    if(!s || !s->services || !s->ready || s->busy || s->firmware_poisoned || !(s->fw_baseline?true:s->dpp_transaction.applied) ||
+       s->route.path>=s->board.count || (khz!=s->clock.pixel_khz && (s->fw_baseline || khz!=s->timing_transaction.timing.pixel_khz)))return ATOM_VM_INPUT;
     uint8_t parameters[60];unsigned bytes=0;const atom_board_path *path=&s->board.paths[s->route.path];
     switch(command){
         case ATOM_DISPLAY_PIXEL_CLOCK:
@@ -341,15 +358,16 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
 enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     if(!s)return RX6600_INPUT;
     memset(s,0,sizeof(*s));
-    if(!k || k->abi!=2 || k->size!=NEXIS_GPU_SERVICES_RESOURCE_BYTES || k->vendor!=0x1002 || k->device!=0x73ff ||
+    if(!k || k->abi!=2 || k->size!=NEXIS_GPU_SERVICES_LOG_BYTES || k->vendor!=0x1002 || (k->device!=0x73ff && k->device!=0x73ef) ||
        !k->width || !k->height || k->pitch<k->width || k->format>1 || k->reserved || k->reserved2 ||
        !k->framebuffer || !k->framebuffer_bytes || !k->rom || !k->rom_bytes ||
        !k->read32 || !k->write32 || !k->time_us || !k->delay_us || !k->resource)return fail(s,RX6600_INPUT);
     s->services=k;
+    nx_log_attach(k);
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;operations->sink_read=sink_read_ddc;operations->sink_write=sink_write_ddc;
     if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
        s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||
@@ -377,6 +395,10 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     enum rx6600_error error=prove(s);if(error)return fail(s,error);
     s->sampled_us=now(s);
     if(!dcn302_otg_frame_count(&s->io,s->route.otg,&s->sampled_frame))return fail(s,RX6600_CLOCK);
+    if(!dcn302_ddc_init(&s->ddc,&s->io,s->route.ddc,s->board.reference_khz))return fail(s,RX6600_ROUTE);
+    nx_logf("rx6600: probe ok, %ux%u at %u kHz (%u.%03u Hz), HDMI path %u, OTG %u, link %u, stream %u, DDC %u, max TMDS %u kHz",
+        s->route.shape.hactive,s->route.shape.vactive,s->clock.pixel_khz,s->clock.refresh_millihz/1000,s->clock.refresh_millihz%1000,
+        s->route.path,s->route.otg,s->route.link,s->route.stream,s->route.ddc,s->route.max_tmds_khz);
     s->ready=true;s->error=RX6600_OK;return RX6600_OK;
 }
 static bool alive(rx6600_state *s){
@@ -394,13 +416,13 @@ static bool alive(rx6600_state *s){
 bool rx6600_read_mode(rx6600_state *s,nexis_gpu_scanout *out){
     if(!out)return false;
     memset(out,0,sizeof(*out));
-    if(!s || !s->ready || s->busy)return false;
+    if(!s || !s->ready || s->busy || s->in_modeset)return false;
     s->busy=true;enum rx6600_error error=prove(s);
     if(!error && !alive(s))error=RX6600_CLOCK;
     if(error){fail(s,error);s->busy=false;return false;}
     out->timing=s->route.shape;out->timing.pixel_khz=s->clock.pixel_khz;
     out->framebuffer=s->surface.cpu_address;out->pitch=s->surface.pitch;out->format=s->surface.format;
-    out->flags=NEXIS_GPU_SCANOUT_ACTIVE|NEXIS_GPU_SCANOUT_HDMI|NEXIS_GPU_SCANOUT_CLOCK_MEASURED;
+    out->flags=NEXIS_GPU_SCANOUT_ACTIVE|NEXIS_GPU_SCANOUT_HDMI|NEXIS_GPU_SCANOUT_CLOCK_MEASURED|(s->audio_active?NEXIS_GPU_SCANOUT_AUDIO:0);
     s->busy=false;return true;
 }
 bool rx6600_set_mode(rx6600_state *s,const nexis_gpu_timing *t){
@@ -409,14 +431,46 @@ bool rx6600_set_mode(rx6600_state *s,const nexis_gpu_timing *t){
     nexis_gpu_timing shape=*t;shape.pixel_khz=0;
     uint32_t clock=current.timing.pixel_khz;
     uint32_t difference=clock>t->pixel_khz?clock-t->pixel_khz:t->pixel_khz-clock;
-    if(!t->pixel_khz || memcmp(&shape,&s->route.shape,sizeof(shape)) || (uint64_t)difference*1000000>(uint64_t)t->pixel_khz*1000){
-        s->error=RX6600_MODESET_PENDING;return false;
+    if(t->pixel_khz && !memcmp(&shape,&s->route.shape,sizeof(shape)) && (uint64_t)difference*1000000<=(uint64_t)t->pixel_khz*1000){
+        /* The hardware already runs exactly this measured mode. */
+        s->error=RX6600_OK;return true;
     }
-    /* Genuine no-op for the already running, measured mode only. */
-    s->error=RX6600_OK;return true;
+    return rx6600_modeset(s,t);
+}
+bool rx6600_still_valid(rx6600_state *s){return s && s->ready && !prove(s);}
+bool rx6600_new_mode_guard(void *context){return timing_guard(context);}
+void rx6600_resample(rx6600_state *s){
+    /* The liveness check compares the frame counter with wall time since the last sample; a stop/restart in between must not look like a hang. */
+    s->sampled_us=now(s);
+    if(!dcn302_otg_frame_count(&s->io,s->route.otg,&s->sampled_frame))fail(s,RX6600_CLOCK);
+}
+void rx6600_commit_baseline(rx6600_state *s){
+    /* The applied fetch/watermark/DPP/timing/clock registers now describe the *running* mode. Their rollback
+     * images belong to the old mode, so drop them; the next mode switch prepares from the new hardware state. */
+    memset(&s->hubp_transaction,0,sizeof(s->hubp_transaction));memset(&s->hubbub_transaction,0,sizeof(s->hubbub_transaction));
+    memset(&s->timing_transaction,0,sizeof(s->timing_transaction));memset(&s->dpp_transaction,0,sizeof(s->dpp_transaction));
+    memset(&s->dfs_transaction,0,sizeof(s->dfs_transaction));memset(&s->resync,0,sizeof(s->resync));
+    memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));memset(s->hubp_floor_mhz,0,sizeof(s->hubp_floor_mhz));
+}
+bool rx6600_refresh_after_modeset(rx6600_state *s,const nexis_gpu_timing *measured){
+    const nexis_gpu_services *k=s->services;dcn302_route route;dcn302_surface surface;
+    dcn302_dfs_snapshot dfs;dcn302_reference reference;dcn302_snapshot fixed;uint32_t frame;
+    /* Gather everything into locals first; the state changes only if every proof holds. */
+    if(!resources(s) || dcn302_route_find(&s->io,&s->board,k->width,k->height,&route)!=DCN302_ROUTE_OK)return false;
+    if(route.path!=s->route.path || route.link!=s->route.link || route.stream!=s->route.stream || route.otg!=s->route.otg ||
+       route.opp!=s->route.opp || route.ddc!=s->route.ddc || route.hpd!=s->route.hpd || route.max_tmds_khz!=s->route.max_tmds_khz)return false;
+    nexis_gpu_timing want=*measured;want.pixel_khz=0;
+    if(memcmp(&want,&route.shape,sizeof(want)))return false;
+    if(dcn302_surface_bind(&s->io,&route,s->vram.base,s->vram.bytes,k->framebuffer,k->framebuffer_bytes,k->pitch,k->format,&surface)!=DCN302_SURFACE_OK)return false;
+    if(!dcn302_otg_snapshot(&s->io,route.otg,&fixed) || dcn302_dfs_read(&s->io,&dfs) || dcn302_reference_read(&s->io,s->board.reference_khz,&reference) ||
+       !dcn302_otg_frame_count(&s->io,route.otg,&frame))return false;
+    s->fixed_rate[0]=fixed.registers[DCN302_R_V_CONTROL];s->fixed_rate[1]=fixed.registers[DCN302_R_V_MIN];s->fixed_rate[2]=fixed.registers[DCN302_R_V_MAX];
+    s->route=route;s->surface=surface;s->dfs=dfs;s->reference=reference;
+    s->sampled_us=now(s);s->sampled_frame=frame;
+    return true;
 }
 void rx6600_poll(rx6600_state *s){
-    if(!s || !s->ready || s->busy)return;
+    if(!s || !s->ready || s->busy || s->in_modeset)return;
     bool connected=false;s->busy=true;
     if(dcn302_route_connected(&s->io,&s->board.paths[s->route.path],s->route.hpd,&connected)!=DCN302_ROUTE_OK || !connected)
         fail(s,RX6600_ROUTE);

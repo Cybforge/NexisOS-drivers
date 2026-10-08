@@ -43,6 +43,9 @@ bool nexis_gpu_mode_readback_matches(const nexis_gpu_scanout *,const nexis_gpu_t
  * kernel sets size to that declared prefix, never silently changes an old ABI. */
 #define NEXIS_GPU_SERVICES_BASE_BYTES 104u
 #define NEXIS_GPU_SERVICES_RESOURCE_BYTES 112u
+/* Third prefix: adds log() and the monitor's EDID. A module that declares 136 bytes in its NDRV
+ * header gets size==136 and may use them; older modules keep their smaller prefix. */
+#define NEXIS_GPU_SERVICES_LOG_BYTES 136u
 #define NEXIS_GPU_RESOURCE_MEMORY 1u
 #define NEXIS_GPU_RESOURCE_64BIT 2u
 #define NEXIS_GPU_RESOURCE_PREFETCH 4u
@@ -63,9 +66,20 @@ typedef struct {
      * config. Does not map/access VRAM. REGISTERS alone permits read32/write32.
      * Failure clears the output. The upper slot of a 64-bit BAR is not a BAR. */
     bool (NEXIS_GPU_CALL *resource)(void *,unsigned bar,nexis_gpu_resource *);
+    /* Diagnostics: one line of printable ASCII (<=199 chars) into the kernel log
+     * ("dmesg" in the Terminal). Hardware bring-up depends on these lines, so
+     * every driver logs its probe result, each modeset step and register values
+     * on failure. Only valid when size>=NEXIS_GPU_SERVICES_LOG_BYTES. */
+    void (NEXIS_GPU_CALL *log)(void *,const char *);
+    /* EDID of the monitor on the firmware's output (copied by the loader from the same output handle as the
+     * framebuffer); NULL/0 when firmware could not provide one. Read-only, valid for the module's lifetime.
+     * Used for the audio capabilities (CTA short audio descriptors, speaker allocation). */
+    const uint8_t *edid;
+    uint32_t edid_bytes,reserved3;
 } nexis_gpu_services;
 _Static_assert(offsetof(nexis_gpu_services,resource)==NEXIS_GPU_SERVICES_BASE_BYTES,"GPU service prefix");
-_Static_assert(sizeof(nexis_gpu_services)==NEXIS_GPU_SERVICES_RESOURCE_BYTES,"GPU service layout");
+_Static_assert(offsetof(nexis_gpu_services,log)==NEXIS_GPU_SERVICES_RESOURCE_BYTES,"GPU service resource prefix");
+_Static_assert(sizeof(nexis_gpu_services)==NEXIS_GPU_SERVICES_LOG_BYTES,"GPU service layout");
 typedef struct {
     uint32_t abi,size;
     void *state;uint32_t state_bytes,reserved;

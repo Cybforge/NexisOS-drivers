@@ -8,6 +8,7 @@
 #define SSET(v,f,n) (((v)&~DCN302_SURFACE_##f##_MASK)|(((uint32_t)(n)<<DCN302_SURFACE_##f##_SHIFT)&DCN302_SURFACE_##f##_MASK))
 int NEXIS_GPU_CALL driver_init_v2(const nexis_gpu_services *,nexis_gpu_instance *);
 static unsigned cases;
+static void NEXIS_GPU_CALL tlog(void *context,const char *text){(void)context;if(getenv("RX6600_TRACE"))fprintf(stderr,"[module] %s\n",text);}
 typedef struct {
     uint8_t rom[2048];uint32_t otg[5][DCN302_TIMING_REGISTER_COUNT],dig[5][DCN302_HDMI_REGISTER_COUNT],surface[5][DCN302_SURFACE_REGISTER_COUNT],hpd[5];
     uint32_t fb_base,fb_top,fb_offset,period;
@@ -200,9 +201,9 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
     m->timer=0x1002;
     m->smu_response=m->smu_status=1;m->smu_version=0x3a0100;m->smu_header=1;m->smu_interface=0x40;m->smu_features=3;
     m->dfs_pll=36|0x80000000u;m->dfs_dentist=24|(24u<<8)|(24u<<24)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;
-    *k=(nexis_gpu_services){.abi=2,.size=112,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
+    *k=(nexis_gpu_services){.abi=2,.size=136,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
         .framebuffer=0x800200000ULL,.framebuffer_bytes=2048u*4*1080,.rom=m->rom,.rom_bytes=2048,.service_context=m,
-        .read32=rd,.write32=wr,.time_us=now,.delay_us=delay,.resource=resource};
+        .read32=rd,.write32=wr,.time_us=now,.delay_us=delay,.resource=resource,.log=tlog};
     m->vram=(nexis_gpu_resource){0x800000000ULL,0x200000000ULL,7,0};m->registers=(nexis_gpu_resource){0xb0000000,0x100000,9,0};
     m->hpd[hpd]=DCN302_HPD_SENSE_MASK|DCN302_HPD_DELAYED_MASK;
     m->dig[link][DCN302_HDMI_R_BE]=HSET(HSET(HSET(0,LINK_MODE,3),FE_SOURCE,1u<<stream),HPD,hpd);
@@ -241,8 +242,8 @@ static void normal(void){
         CHECK(s.smu.ready && s.smu.clocks[1].valid && s.smu.clocks[2].valid && s.smu.clocks[8].valid && s.smu.clocks[9].valid && s.smu.clocks[10].valid && s.smu.clocks[11].valid && m.smu_triggers==28 && !m.smu_clock_requests);
         CHECK(s.memory.type==0x70 && s.memory.channels==8 && s.memory.channel_bytes==2 && s.memory.memory_mb==8192);
         CHECK(rx6600_read_mode(&s,&out) && out.framebuffer==k.framebuffer && out.pitch==2048 && out.format==format && out.flags==11 && out.timing.pixel_khz>558000);
-        CHECK(rx6600_set_mode(&s,&out.timing));nexis_gpu_timing changed=out.timing;changed.pixel_khz=148500;
-        CHECK(!rx6600_set_mode(&s,&changed) && s.error==RX6600_MODESET_PENDING && s.ready && !m.writes);
+        CHECK(rx6600_set_mode(&s,&out.timing));nexis_gpu_timing changed=out.timing;changed.pixel_khz=700000; /* outside the connector range: rejected before any register is touched (a feasible switch is covered by test_rx6600_modeset.c) */
+        CHECK(!rx6600_set_mode(&s,&changed) && s.ready && !m.writes);
         m.time+=500000;rx6600_poll(&s);CHECK(s.ready && rx6600_read_mode(&s,&out));
         rx6600_shutdown(&s);CHECK(!s.ready && !rx6600_read_mode(&s,&out) && !out.flags && !m.invalid && !m.writes);cases++;
     }
@@ -507,7 +508,7 @@ static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t 
     m.surface[1][DCN302_SURFACE_R_HUBP]=0;m.otg[3][DCN302_R_CONTROL]=control;
     completed_writes=m.writes;
     m.time+=500000;out.poll(out.state);CHECK(out.read_mode(out.state,&mode) && out.set_mode(out.state,&mode.timing));
-    mode.timing.pixel_khz/=2;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
+    mode.timing.pixel_khz=700000;CHECK(!out.set_mode(out.state,&mode.timing));out.shutdown(out.state);CHECK(!out.read_mode(out.state,&mode) && m.writes==completed_writes && !m.invalid);cases++;
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(entry(&k,&out)==0);native=out.state;
     m.registers.base+=4096;triggers=m.smu_triggers;
     CHECK(!native->clock_floor(native,DCN302_SMU_UCLK,558,&acknowledged) && !acknowledged && !native->ready && m.smu_triggers==triggers);out.shutdown(out.state);cases++;

@@ -1,165 +1,115 @@
-# NexisOS external graphics drivers
+# NexisOS display drivers
 
-This repository currently contains one implemented driver: **QEMU standard VGA / Bochs DISPI**, PCI `1234:1111`.
-It does not fulfill the request for five physical graphics drivers.
+Signed, device-matched display driver packages for [NexisOS](https://github.com/Cybforge) (a from-scratch UEFI
+operating system written in C). The OS image contains **no** driver binaries: it detects the primary display
+adapter at run time and downloads the one matching package from this repository in the background. There is no
+Store entry and nothing to click.
 
-Native physical-driver work is in progress. `kernel/drivers/audio/hdmi.c`
-contains an AMD `1002:aa01` stereo HDA codec helper, and `tools/gpu-driver/amd/`
-contains a bounded ATOM firmware parser and bytecode interpreter. EDID/connector mode policy
-and read-only UEFI ROM capture are also included as supporting source.
-The new DCN302 components implement native OTG timing/scanout register control,
-hardware DDC/I2C transactions, SCDC scrambling/link verification, HDMI/AFMT
-packet/audio clock setup and running frame-counter frequency measurement.
-They now also decode ATOM board GPIO/DDC/HPD/UNIPHY wiring, build versioned
-RGB8 HDMI pixel/stream/transmitter commands, bind independently numbered
-stream and physical link encoders, and validate the actual linear HUBP VRAM
-surface against the firmware PCI aperture and Desktop framebuffer.
-They have register-model and freestanding PIC build checks. They are external
-backend components. The new retained RX6600 adapter connects real ROM wiring,
-native routing, VRAM surface proof and measured hardware timing, with read/poll/
-shutdown callbacks. Its external PIC candidate executes in host register-model
-checks at two verified distinct addresses. The native DAL SMU protocol now
-queries supported clocks and sends acknowledged clock-floor requests. The
-native DFS/DTO transaction reads the real PLL/dividers, quantizes clocks,
-requires all five pipelines stopped and adequate owned SMU floors, and applies
-and restores actual display/DPP clock registers. Uncertain pending requests
-are not replayed; exact fractional PLL math protects voltage-floor rounding.
-The retained backend now also decodes GDDR6 VRAM_INFO 2.3/2.4/2.5, requires
-consistent module geometry and queries native SOCCLK limits. The pinned AMD
-DCN30 VBA/RQ/DLG engine computes a single RGB8 pipe's bandwidth, clocks,
-watermarks and deadline/request values using board memory width, acknowledged
-UCLK/DCF/SOC/PHY floors and explicit current/prepared DFS clocks. Its FP scope
-preserves x87/XMM/MXCSR and turns math assertions into rejected calculations.
-Native HUBP programming now binds the DML result to actual native clocks/floors,
-checks all 70 field widths and programs 42 real Navi23 registers only with
-stopped OTGs/VTGs and a powered, blanked and drained HUBP. It follows DCN3's
-DCN2 blank inheritance (drain before blank; TTU_DISABLE=0), excludes status/W1C
-bits and verifies reverse rollback after posted failures. These operations run
-at two distinct retained PIC bases; their register responses are modeled.
-Native HUBBUB programming now converts DML watermarks with the actual ROM/DCCG/
-HUBBUB reference clock, including the native divide-by-two setting, rather than
-using the undivided crystal. It checks the real Navi23 14/16-bit widths, copies
-the minimum-floor plan into all four sets and forces off memory clock changes
-and self refresh before writing. Rollback restores old fetch registers first,
-then old watermarks and policy last; pending/failed rollback keeps scanout off.
-UCLK commands are blocked while this policy is active. Posted and ignored writes
-are exercised in the combined retained module at both PIC addresses. This is
-configuration evidence, not proof of a completed physical memory transition.
-Native timing/global sync now binds to the same retained DML plan. It uses the
-actual DCN3 GLOBAL_CONTROL2 update-lock selector, bounded acknowledgment/pending
-drain, disabled buffering and status/instant-trigger exclusion. Each write and
-rollback re-proves the parent PCI resources, native DFS clocks, all six owned
-SMU floors, installed fetch/WM/reference state and stopped/powered pipelines.
-Old timing must be restored before fetch, policy or clocks can be released;
-lost native state leaves it quarantined until explicit restoration. This runs
-at both distinct PIC addresses with apply/restore write faults, including
-posted/ignored writes. It still does not enable the native pixel/link path.
-The native DPP transaction now programs real RGB8888 conversion, identity CNV
-crossbar, unity pre-degamma/CSC/CM bypass, disabled alpha/color key, full recout,
-the float-format linebuffer and 1:1 scaler. Both actual cursor enables are
-disabled; HUBP/DPP share one CURSOR_CONTROL register and CNVC has the other.
-The checked 24-register map owns 18 configuration registers and excludes RO
-pending/current/partition status. Powered linebuffer, HUBP clocks and local
-DPP clock enable/test mux are proven. The DML linebuffer was corrected from
-8 to the native internal 16 bits per channel (48 bits per RGB pixel).
-Each write/rollback re-proves retained PCI/clocks/floors/fetch/WM. Timing also
-verifies the installed DPP path and must restore before DPP; DPP restores before
-fetch/WM/clocks, with old cursors last. Posted/ignored writes, lost native state,
-explicit restoration and repeat-apply rejection execute at both PIC addresses.
-These model checks do not prove active physical pixels or a completed modeset.
-The retained RX6600 now connects its bounded ATOM interpreter to the actual
-BAR5 register services. Firmware-selected MMIO/IIO uses checked DWORD-to-byte
-offsets, with direct REG0's value shift applied exactly once by the VM.
-Board-derived HDMI parameters select the real PHY, independent stream, OTG
-and HPD, with PixelClock1.7, Encoder1.5 and Transmitter1.6/1.7 validation.
-Every access re-proves stopped scanout, PCI resources, all six clock floors,
-installed fetch/watermarks/reference and DPP state. Legacy PLL/MC operands and
-early scanout activation fail explicitly. Possibly posted writes quarantine
-dependencies; they cannot be reset, silently replayed or released. No request
-or bytecode reply is advertised as measured PLL frequency or sink lock.
-The VM now rejects backwards clocks and expired deadlines at IO boundaries,
-including a slow read followed by a write in the same instruction. Native
-code executes at two distinct retained PIC bases, with every parent read and
-resource-query failure, raw-read/write/delay time faults and persistent lost
-state checked. Ten pinned primary AMD sources verify the native semantics.
-The board's actual ROM has not been executed on physical hardware. Complete
-pixel resync, PLL/PHY/link rollback, activation/readback and audio remain open.
-Full modeset composition, active scaling/color/cursor proof, pixel PLL/PHY and coordinated HDMI
-audio modesetting remain pending; it is not a complete card driver or catalog package. See
-`docs/PHYSICAL_DISPLAY_2026-10-07.md`.
-The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
+> **Honest status:** the download / signature / cache / install / safety-net machinery is tested end to end in QEMU.
+> The AMD Radeon RX 6600 driver is complete as source and is verified against **register models only**
+> (host tests, sanitizers, fault injection). **No driver in this repository has run on physical GPU hardware yet.**
+> That is why every hardware package is a *trial* package (see "Safety nets").
 
-The retained ABI2 loader now provides persistent PIC code/state, checked
-callbacks, bounded register services, firmware-reported PCI resource extents
-and read-back mode validation. Its code pages are read-only/executable; data is
-writable/NX, and RAM identity aliases cannot write executable code. ABI2 has
-**no implemented physical card module in the download catalog yet**. The
-loader test fixture is not a graphics driver and is never distributed as one.
-The service resource extension independently checks UEFI memory extents against
-live PCI BARs, including large VRAM, without mapping them or writing PCI config.
-104-byte legacy and 112-byte resource service prefixes are explicitly versioned
-in the module header; upper halves of 64-bit BARs cannot authorize another BAR.
+## Packages
 
-## Actual support
+| Package | Hardware | Status |
+| --- | --- | --- |
+| `bochs` (v2) | QEMU standard VGA / Bochs DISPI, PCI `1234:1111` | implemented, tested in QEMU (virtual test device) |
+| `rx6600` (v1) | AMD Radeon RX 6600 / 6650 XT, Navi23 (DCN 3.0.2), PCI `1002:73ff`, `1002:73ef` | complete native HDMI sequence incl. full refresh rate and HDMI audio; register-model verified only, **not run on hardware** |
+| AMD RDNA2 big (RX 6700 / 6800 / 6900) | Navi21 / Navi22 | **not implemented**, no package published |
+| AMD Polaris / Vega (RX 580 ...) | GCN4/5, DCE 11/12 / DCN 1 | **not implemented**, no package published |
+| AMD RDNA1 (RX 5700 ...) | Navi10, DCN 2.0 | **not implemented**, no package published |
+| Intel UHD / Iris Xe | Gen9-Gen12 display engine | **not implemented**, no package published |
 
-| Function | Status |
-| --- | --- |
-| Native QEMU standard-VGA modesetting | Implemented; tested in QEMU |
-| External module download selected by PCI ID | Implemented; tested |
-| Pinned SHA-256 and ABI validation | Implemented; corrupted download rejected |
-| Automatic background installation without a Store listing | Implemented |
-| Live boot: RAM cache, download again next boot | Implemented |
-| Installed system: verified module copied to persistent /opt | Implemented; two reboots with the download server stopped passed |
-| Physical AMD RX6600 | **Not implemented** |
-| Four other requested physical graphics cards | **Not implemented** |
-| Highest physical monitor refresh rate / link training | **Not implemented** |
-| GPU acceleration / hardware video decoding | **Not implemented** |
-| HDMI audio in this graphics module | **Not implemented**; QEMU standard VGA has no audio device |
+On an adapter without a package nothing is downloaded or installed and the firmware (UEFI GOP) framebuffer simply
+stays in use.
 
-Do not install this driver on an AMD, Intel or NVIDIA physical card. NexisOS selects it only for the exact supported PCI device and firmware aperture. Unsupported cards retain their firmware framebuffer.
+## What the RX6600 driver does
 
-A physical RX6600 driver needs AMD-specific device/firmware initialization, display clocks, DCN scanout, EDID/DDC, HDMI/DisplayPort link configuration and coordination with an audio codec. These are not replaced by PCI identification or by this Bochs implementation. AMD's architecture is documented at https://docs.kernel.org/gpu/amdgpu/display/index.html .
+Linux' `amdgpu` display core (v6.12, `link_dpms.c`, `dcn20_hwseq.c`) is the reference for the order of operations.
+Every step is a separately tested register transaction with a rollback:
 
-## Layout and integration
+1. raise the SMU hard-minimum clocks, prepare the DFS/DTO clock request, run AMD's DML bandwidth / watermark math
+2. stop the OTG and the old transmitter (the screen goes dark here)
+3. program display/DPP clocks, HUBP fetch + HUBBUB watermarks, DPP color path, OTG timing and global sync
+4. ATOM firmware `SetPixelClock` (the board's own VBIOS tables), PHY PLL pixel resync
+5. SCDC over DDC (scrambling and the 1:40 clock ratio above 340 MHz), HDMI / AFMT stream setup
+6. AZALIA audio endpoint from the monitor's EDID (CTA-861 audio block) and the audio wall-clock DTO
+7. UNIPHY transmitter on, OTG on, measure the real pixel clock with the frame counter, check scrambler / sink lock
+8. HUBP visible, AVMUTE off, audio packets and endpoint on
 
-- `tools/gpu-driver/bochs/bochs.c`: actual DISPI programming with rollback on failed attachment.
-- `tools/gpu-driver/include/nexis_gpu.h`: versioned init-only ABI.
-- `tools/gpu-driver/include/nexis_gpu_v2.h`: retained SysV x86-64 ABI.
-- `scripts/build_gpu_module_v2.py`: retained external module builder, rejects imports and runtime relocations.
-- `kernel/drivers/gpu/runtime.c`: retained module/scanout integration; activation requires hardware readback.
-- `tools/gpu-driver/amd/atom_vm.c`: bounded board-bytecode execution with explicit unsupported-operation errors.
-- `tools/gpu-driver/amd/dcn302_otg.c`: native Navi23 timing/VTG/OTG control; preserves the existing single OPP routing.
-- `tools/gpu-driver/amd/dcn302_ddc.c`: actual hardware I2C FIFO/arbitration transactions; firmware-owned transfers are not reset.
-- `tools/gpu-driver/amd/hdmi_scdc.c`: monitor scrambling/clock ratio configuration, readback, sink lock and rollback.
-- `tools/gpu-driver/amd/dcn302_hdmi.c`: native RGB8 HDMI/AFMT packet and stereo PCM48 ACR setup, AVMUTE and rollback.
-- `tools/gpu-driver/amd/dcn302_clock.c`: calibrated native frame-counter timing proof; no EDID/requested clock fallback.
-- `tools/gpu-driver/amd/dcn302_smu.c`: actual native DAL mailbox, version/clock-limit checks, acknowledged clock floors and uncertain-request quarantine.
-- `tools/gpu-driver/amd/dcn302_dfs.c`: native PLL/divider/DTO readback and stopped-pipeline display/DPP clock transaction with verified rollback and voltage-floor checks.
-- `tools/gpu-driver/amd/atom_memory.c`: bounded consistent GDDR6 board topology, never guessed active memory clocks.
-- `tools/gpu-driver/amd/dcn302_dml.c`: scoped complete AMD DCN30 bandwidth/RQ/DLG calculation for one linear RGB8 HDMI pipeline; no register writes.
-- `tools/gpu-driver/amd/dcn302_hubp.c`: actual stopped/blanked Navi23 RQ/DLG/TTU programming, field bounds, native DCN3 drain/blank behavior and verified rollback; no full modeset claim.
-- `tools/gpu-driver/amd/dcn302_hubbub.c`: native reference-clock selection/divider, four checked watermark sets and fixed-floor memory/self-refresh policy with verified reverse rollback; no physical transition-completion claim.
-- `tools/gpu-driver/amd/dcn302_timing.c`: native stopped geometry/global-sync with DCN3 update lock, bounded pending drain, buffering policy and parent-guarded rollback before releasing fetch/WM/clocks; no PLL/PHY/scanout activation claim.
-- `tools/gpu-driver/amd/dcn302_dpp.c`: native RGB8 conversion/color bypass, float-format 1:1 scaler/linebuffer and both physical cursor controls; status-safe stopped/powered guarded writes and reverse restoration before fetch/WM/clocks.
-- `scripts/verify_rx6600_firmware_reference.py`: checksum-pinned primary-source verification of native ATOM MMIO/IIO semantics, command versions/actions and the additional pixel-resync requirement; no physical hardware claim.
-- `tools/gpu-driver/amd/dml/`: checksum-pinned AMD MIT math source with original notices and reproducible platform-only adaptations.
-- `scripts/import_dcn30_dml.py`: verifies upstream hashes, preserves the algorithm and excludes board/clock placeholders from the ASIC template.
-- `scripts/test_dcn302_dml.py`: complete math and real retained PIC calculations, FP-state/error recovery and sanitizer checks; no claim of physical hardware verification.
-- `tools/gpu-driver/common/memory.c`: freestanding module memory primitives, without C library/kernel imports.
-- `scripts/generate_dcn302*_regs.py`: exact register subsets generated from checksum-pinned AMD Linux v6.12 source definitions.
-- `scripts/test_dcn302*.py`: native-code register models, transaction failures and undefined-behavior checks.
-- `scripts/test_gpu_native_link.py`: real native code linked as an import/relocation-free NDRV2 fixture. The fixture always rejects activation and is never distributed.
-- `tools/gpu-driver/module.ld`: image layout.
-- `scripts/build_gpu_modules.py`: reproducible Zig 0.13 compiler build, rejects imports/relocations/writable program globals, creates the module and kernel pin.
-- `kernel/drivers/gpu/`: NexisOS loader/cache integration. Call `gpu_packages_poll()` from the Store's idle job poll. The installer calls `gpu_prepare_install()` and saves `gpu_install_payload()` to `/opt/nexis-drivers/bochs.ndrv` in the installed root.
-- `packages/bochs.ndrv`: **external binary, not embedded in the ISO**.
-- `catalog.json`: truthful capabilities and pinned hash.
-- `tests/host/test_gpu_module.c`: register model, input rejection and rollback.
-- `tests/qemu-results.json`: actual takeover, corrupted-download and unmatched-device boot results.
-- `tests/install-results.json`: disposable disk installation, exact ext4 payload/mode verification and two cached-driver reboots.
+Any failing step undoes the completed ones in reverse and "relights" the previous mode. Before the first change to the
+target mode the sequence is run once for the *current* mode as a self-test, so a broken sequence on a board costs a
+second of black screen, not the target mode. Audio problems degrade to video-only; they never cost the picture.
+All steps log through the kernel log (`[GPU:rx6600] ...`).
 
-The OS checks an exact compiled-in hash before executing a module. A module is mapped supervisor-only, changed from writable/NX to read-only/executable, called once with interrupts disabled, then unmapped. Version 1 does not support persistent callbacks, GPU interrupts, DMA or writable module state. Loading a new module version requires updating the OS's pin and rebuilding the kernel; a mutable GitHub file cannot silently change kernel code.
+The target is chosen from the monitor's EDID: the highest refresh rate it advertises at the desktop's current
+resolution that the link can carry (for example 1920x1080 at 239.998 Hz over HDMI, which needs scrambling). Modes
+outside 25 MHz .. the sink's maximum TMDS clock are rejected before any register is written. The resolution stays
+the one UEFI chose, so the framebuffer the desktop draws into does not move.
 
-Build the external module with `python scripts/build_gpu_modules.py` (set `NEXIS_ZIG` if Zig is not on PATH). The matching OS needs the framebuffer attach helpers in NexisOS and the Store/installer integration. Hardware register specification: https://www.qemu.org/docs/master/specs/standard-vga.html .
+## How a driver reaches the machine
 
-License: original source here is MIT licensed. No third-party GPU firmware or Linux driver binaries are included.
+1. The kernel reads the PCI IDs of the adapter UEFI/GOP is using and looks them up in a compiled-in table
+   (`kernel/drivers/gpu/pins.h`, generated from `catalog.json`).
+2. **Installed system:** a verified copy in `/opt/nexis-drivers/<name>.ndpk` is loaded immediately; the download then
+   only checks for a newer version (used from the next boot).
+   **Live medium or first boot after installation:** `<name>.ndpk` is downloaded in the background from
+   `https://raw.githubusercontent.com/Cybforge/NexisOS-drivers/main/packages/`, verified, cached and started at once.
+   A live session keeps `/opt` in RAM, so it downloads again on every boot; the installer copies the verified
+   package to the installed system's persistent `/opt`.
+3. The module is mapped, started and attached to the display compositor; the desktop switches to the native mode
+   without a restart, and the HDMI audio endpoint is handed to the HD-Audio driver.
+
+## Package format and trust
+
+A package is an NDPK envelope: `"NDPK"`, format, module size, version, name, then the position-independent module
+(NDRV v2: no imports, no runtime relocations, built with Zig; see `scripts/build_gpu_module_v2.py`), followed by a
+64-byte **ECDSA P-256 / SHA-256** signature. The public key is compiled into the kernel (BearSSL verification); the
+private key never leaves the maintainer's machine and is not in this repository. The catalog also carries a minimum
+version per package, so an old, validly signed package cannot be replayed. A tampered or unsigned file is rejected and
+the firmware framebuffer stays in use. Modules run supervisor-mode code: the trust anchor is the signature, not the
+GitHub URL.
+
+## Safety nets (hardware drivers are trial packages)
+
+* **Start-up countdown:** 10 s after the package is verified, with a notice. **Esc** skips the driver for this boot
+  (the package stays cached). Without it a driver that hangs the machine on start-up would hang every live-medium boot.
+* **Trial prompt:** after the native mode is active, **Enter** keeps it; **Esc** or no input within 15 s restores the
+  firmware mode. A black screen cannot become permanent.
+* **Crash marker:** `/opt/nexis-drivers/<name>.try` is written before the module starts and removed when it ended
+  cleanly. If the machine hangs inside the driver, that version is skipped on the next boot (installed systems).
+* **Kernel options:** `nogpudriver` (never load a driver), `gpuautokeep` (no countdown, no trial prompt),
+  `gpudriverlocal` (download from `http://10.0.2.2:8930/`, for QEMU tests).
+
+## Repository layout
+
+* `packages/<name>.ndpk` - the signed packages (what the kernel downloads)
+* `catalog.json` - what each package serves and its status
+* `tools/gpu-driver/` - driver sources: `bochs/`, `amd/` (RX6600 / DCN 3.0.2 components, ATOM interpreter, DML port),
+  `common/` (logging, mode-switch sequencer, CTA-861 audio parser), `include/nexis_gpu_v2.h` (module ABI)
+* `kernel/drivers/gpu/` - the OS side: catalog, package verifier, retained-module runtime, download / cache / trial logic
+* `scripts/` - package build, signing and publishing (`build_gpu_catalog.py`, `gpu_package.py`,
+  `publish_gpu_drivers.py`), register generators (`generate_dcn302_*.py`, from pinned Linux v6.12 sources) and tests
+* `tests/host/` - register-model tests with fault injection
+* `docs/GPU_DRIVERS.md` - design notes (German)
+
+## Tests
+
+| Test | What it proves | What it does not prove |
+| --- | --- | --- |
+| `scripts/test_rx6600_modeset.py` | full mode switch, rollback, relight and audio against a register model with fault injection (1,849 scenarios) | that real silicon behaves like the model |
+| `scripts/test_rx6600.py`, `test_dcn302*.py` | each hardware transaction, retained module at two PIC addresses, UBSan | physical behavior |
+| `scripts/test_modeset_seq.py`, `test_cta_audio.py` | sequencer, EDID audio-block parser (200k fuzz cases) | - |
+| `scripts/test_gpu_platform_qemu.py` | download, signature check, tampered package rejected, unmatched adapter downloads nothing | - |
+| `scripts/test_gpu_install_qemu.py` | installer persists the package, two reboots without network | - |
+| `scripts/test_gpu_countdown_qemu.py` | countdown, Esc skip, automatic revert (needs a trial-marked test image) | - |
+
+## Reporting hardware results
+
+If you run a hardware package, the kernel log (`dmesg`) shows every step. A failed run that restores the firmware mode,
+or a log that stops at a specific step, is exactly the information needed to fix the next iteration. The remaining
+hardware families are only worth publishing once someone with that hardware can test them.
+
+License: MIT. No third-party GPU firmware or Linux driver binaries are included; AMD's DML math sources keep their
+original MIT notices.

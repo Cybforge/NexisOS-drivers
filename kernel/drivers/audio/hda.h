@@ -15,5 +15,7 @@ void hda_set_volume(uint8_t vol_percent);
 bool hda_play_pcm(const int16_t *samples, size_t count);
 const char *hda_get_name(void);
 bool hda_output_ready(void);
+bool hda_is_hdmi(void);
+bool hda_rescan_hdmi(void);
 
 #endif /* NEXIS_HDA_H */

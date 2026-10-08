@@ -1,5 +1,5 @@
-/* Actual retained native RX6600 adapter under construction. Not a catalog
- * package until mode-changing clock/PHY/bandwidth/HDMI transactions are done. */
+/* Retained native RX6600 (Navi23 / DCN3.02) HDMI display module. set_mode runs the complete native sequence
+ * of rx6600_modeset.c with rollback; see that file and docs/GPU_DRIVERS.md for what is and is not hardware-proven. */
 #include "rx6600.h"
 #include <string.h>
 static rx6600_state state;
@@ -14,7 +14,7 @@ int NEXIS_GPU_CALL driver_init_v2(const nexis_gpu_services *services,nexis_gpu_i
     if(error){rx6600_shutdown(&state);return error;}
     volatile nexis_gpu_instance *out=instance;
     out->abi=2;out->size=sizeof(*instance);out->state=&state;out->state_bytes=sizeof(state);
-    out->name="AMD Radeon RX6600 native backend (development)";
+    out->name="AMD Radeon RX 6600 (native HDMI)";
     out->max_pixel_khz=state.route.max_tmds_khz;out->max_tmds_khz=state.route.max_tmds_khz;
     out->hdmi=true;out->scdc=true;
     out->read_mode=read_mode;out->set_mode=set_mode;out->poll=poll;out->shutdown=shutdown;

@@ -5,7 +5,9 @@ import argparse,hashlib,json,os,shutil,struct,subprocess
 from build_gpu_module_v2 import build
 root=Path(__file__).resolve().parents[1];out=root/'build/rx6600-tests';out.mkdir(exist_ok=True)
 p=argparse.ArgumentParser();p.add_argument('--sanitizer',action='store_true');args=p.parse_args()
-native=['tools/gpu-driver/amd/rx6600_module.c','tools/gpu-driver/amd/rx6600.c',
+native=['tools/gpu-driver/amd/rx6600_module.c','tools/gpu-driver/amd/rx6600.c','tools/gpu-driver/amd/rx6600_modeset.c',
+ 'tools/gpu-driver/amd/dcn302_ddc.c','tools/gpu-driver/amd/dcn302_audio.c','tools/gpu-driver/common/cta_audio.c','tools/gpu-driver/amd/dcn302_hdmi.c','tools/gpu-driver/amd/hdmi_scdc.c','tools/gpu-driver/amd/dcn302_pixel_resync.c',
+ 'tools/gpu-driver/common/nxlog.c','tools/gpu-driver/common/modeset_seq.c',
  'tools/gpu-driver/amd/atom_tables.c','tools/gpu-driver/amd/atom_board.c','tools/gpu-driver/amd/dcn302_route.c',
  'tools/gpu-driver/amd/atom_vm.c','tools/gpu-driver/amd/atom_display_commands.c',
  'tools/gpu-driver/amd/dcn302_surface.c','tools/gpu-driver/amd/dcn302_otg.c','tools/gpu-driver/amd/dcn302_clock.c',

@@ -8,8 +8,10 @@ static const unsigned char gpu_signing_key[65] __attribute__((unused)) = {0x04,0
 static const char *const gpu_mirrors[] __attribute__((unused)) = {"https://raw.githubusercontent.com/Cybforge/NexisOS-drivers/main/packages/","https://raw.githubusercontent.com/jojojonas169-debug/NexisOS-drivers/main/packages/"};
 #define GPU_MIRROR_COUNT 2
 static const uint16_t gpu_devices_bochs[] __attribute__((unused)) = {0x1111};
+static const uint16_t gpu_devices_rx6600[] __attribute__((unused)) = {0x73ff,0x73ef};
 static const gpu_catalog_entry gpu_catalog[] __attribute__((unused)) = {
  {"bochs",0x1234,gpu_devices_bochs,1,1,0},
+ {"rx6600",0x1002,gpu_devices_rx6600,2,1,1},
 };
-#define GPU_CATALOG_COUNT 1
+#define GPU_CATALOG_COUNT 2
 #endif

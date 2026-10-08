@@ -13,6 +13,7 @@
  * dword (the neighbour is written back unchanged, which QEMU accepts).
  */
 #include "../include/nexis_gpu_v2.h"
+#include "../common/nxlog.h"
 #include <string.h>
 
 #define BAR_REGS 2u
@@ -90,21 +91,23 @@ static void NEXIS_GPU_CALL shutdown(void *p) { (void)p; B.ready = false; }
 int NEXIS_GPU_CALL driver_init_v2(const nexis_gpu_services *services, nexis_gpu_instance *instance) {
     if (!instance) return -1;
     memset(instance, 0, sizeof(*instance));
-    if (!services || services->abi != 2 || services->size != NEXIS_GPU_SERVICES_RESOURCE_BYTES ||
+    if (!services || services->abi != 2 || services->size != NEXIS_GPU_SERVICES_LOG_BYTES ||
         services->vendor != 0x1234 || services->device != 0x1111 || !services->read32 || !services->write32 ||
         !services->framebuffer || !services->width || !services->height || services->width > 4096 ||
         services->height > 2160 || services->pitch < services->width || services->pitch > 8192 ||
         (uint64_t)services->pitch * services->height * 4 > services->framebuffer_bytes)
         return -2;
     memset(&B, 0, sizeof(B));
+    nx_log_attach(services);
     B.s = services; B.pitch = services->pitch;
     uint16_t id;
-    if (!rd(ID, &id) || id < 0xb0c2 || id > 0xb0c5) return -3;
+    if (!rd(ID, &id) || id < 0xb0c2 || id > 0xb0c5) { nx_logf("bochs: unexpected DISPI id %04x", id); return -3; }
     for (unsigned i = 0; i < 10; i++) if (!rd(i, &B.saved[i])) return -4;
     if (!program(ENABLED | LFB | NOCLEAR)) { restore(); return -5; }
     default_timing(&B.timing);
     if (!verify()) { restore(); return -6; }
     B.ready = true;
+    nx_logf("bochs: DISPI id %04x, %ux%u pitch %u, framebuffer %llx", id, services->width, services->height, services->pitch, (unsigned long long)services->framebuffer);
     volatile nexis_gpu_instance *o = instance;
     o->abi = 2; o->size = sizeof(*instance); o->state = &B; o->state_bytes = sizeof(B);
     o->name = "QEMU/Bochs virtual display (timings are bookkeeping)";

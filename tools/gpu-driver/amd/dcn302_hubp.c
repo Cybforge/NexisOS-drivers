@@ -125,6 +125,21 @@ enum dcn302_hubp_error dcn302_hubp_blank(const dcn302_io *io,unsigned hubp,uint6
     }
     return DCN302_HUBP_TIMEOUT;
 }
+/* Counterpart of dcn302_hubp_blank (hubp2_set_blank with blank=false: BLANK_EN=0, TTU_DISABLE=0).
+ * Linux unblanks the plane after the OTG runs, so the first visible frame is a complete one. */
+enum dcn302_hubp_error dcn302_hubp_unblank(const dcn302_io *io,unsigned hubp){
+    if(!io_valid(io) || hubp>=5)return DCN302_HUBP_INPUT;
+    enum dcn302_hubp_error e=powered(io,hubp);if(e)return e;
+    uint32_t old,c;
+    if(!io->read(io->context,dcn302_hubp_register_bytes[hubp][CONTROL],&old))return DCN302_HUBP_IO;
+    if(old&DCN302_HUBP_HUBP_DISABLE_MASK)return DCN302_HUBP_POWER;
+    if(!(old&DCN302_HUBP_HUBP_BLANK_EN_MASK))return DCN302_HUBP_OK; /* already visible */
+    uint32_t value=old&~(BLANK|dcn302_hubp_forbidden[CONTROL]|dcn302_hubp_readonly[CONTROL]);
+    if(!io->write(io->context,dcn302_hubp_register_bytes[hubp][CONTROL],value))return DCN302_HUBP_IO;
+    if(!io->read(io->context,dcn302_hubp_register_bytes[hubp][CONTROL],&c))return DCN302_HUBP_IO;
+    if((c&BLANK) || (c&config_mask(CONTROL))!=(old&config_mask(CONTROL)))return DCN302_HUBP_READBACK;
+    return powered(io,hubp);
+}
 static bool usable(const dcn302_io *io,const dcn302_hubp_transaction *t){
     if(!io_valid(io) || !t || (uintptr_t)t%_Alignof(dcn302_hubp_transaction) || !t->prepared || t->hubp>=5 || io->context!=t->owner.context ||
        io->read!=t->owner.read || io->write!=t->owner.write || io->delay_us!=t->owner.delay_us ||

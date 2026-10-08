@@ -11,7 +11,7 @@
 #include "../../../tools/gpu-driver/include/nexis_gpu_v2.h"
 #define BASE GPU_MODULE_VIRTUAL_BASE
 static struct {
-    bool resident,active,calling,have_initial;
+    bool resident,active,calling,have_initial,audio;
     uint64_t physical,last_poll_us,bar[6],bar_bytes[6];size_t pages,mapped;
     nexis_gpu_image image;
     nexis_gpu_services services;
@@ -32,6 +32,13 @@ static bool NEXIS_GPU_CALL delay_us(void *context,uint32_t us){
     uint64_t start=time_us(context);
     while(time_us(context)-start<us)__asm__ volatile("pause");
     return true;
+}
+static void NEXIS_GPU_CALL service_log(void *context,const char *text){
+    /* Module diagnostics. The module is signed and trusted, but still copy a bounded, printable line. */
+    if(context!=&R || !text)return;
+    char line[200];size_t n=0;
+    while(n<sizeof(line)-1 && text[n]){unsigned char c=(unsigned char)text[n];line[n]=(c>=32 && c<127)?(char)c:'?';n++;}
+    line[n]=0;kprintf("[GPU:%s] %s\n",R.name[0]?R.name:"module",line);
 }
 static bool register_address(void *context,unsigned bar,uint32_t offset,uint64_t *out){
     if(context!=&R || bar>=6 || (offset&3) || !R.bar[bar] || R.bar_bytes[bar]<4 || offset>R.bar_bytes[bar]-4)return false;
@@ -161,7 +168,8 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
         device->vendor_id,device->device_id,device->bus,device->slot,device->func,0,fb_front_base(),fb_front_size(),
         boot->gpu_rom_size && boot->gpu_rom_size<=1024*1024 && boot->gpu_rom_addr && boot->gpu_rom_addr<(1ULL<<32) &&
         boot->gpu_rom_size<=(1ULL<<32)-boot->gpu_rom_addr?(void *)(uintptr_t)boot->gpu_rom_addr:NULL,
-        boot->gpu_rom_size,0,&R,read32,write32,time_us,delay_us,resource};
+        boot->gpu_rom_size,0,&R,read32,write32,time_us,delay_us,resource,service_log,
+        boot->edid_size && boot->edid_size<=sizeof(boot->edid)?boot->edid:NULL,boot->edid_size<=sizeof(boot->edid)?boot->edid_size:0,0};
     if(!R.services.rom)R.services.rom_bytes=0;
     R.driver.abi=2;R.driver.size=sizeof(R.driver);R.calling=true;
     nexis_gpu_entry_v2 entry=(void *)(uintptr_t)(BASE+image.entry);
@@ -185,7 +193,7 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
     }else if(!scanout(&actual)){release(true);return false;}
     if(!fb_native_activate(actual.framebuffer,actual.pitch,actual.format,R.name)){release(true);return false;}
     memcpy(&desired,&actual.timing,sizeof(desired));display_set_native_mode(&desired);
-    R.resident=R.active=true;R.last_poll_us=time_us(&R);
+    R.resident=R.active=true;R.audio=(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0;R.last_poll_us=time_us(&R);
     kprintf("[GPU] Retained native module: %s, hardware mode %u.%03u Hz; HDMI packets %u\n",R.name,
         edid_refresh_millihz(&desired)/1000,edid_refresh_millihz(&desired)%1000,(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0);
     return true;
@@ -193,12 +201,13 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
 void gpu_runtime_poll(void){
     if(!R.resident || R.calling || time_us(&R)-R.last_poll_us<100000)return;
     R.calling=true;R.last_poll_us=time_us(&R);if(R.driver.poll)R.driver.poll(R.driver.state);
-    nexis_gpu_scanout mode;R.active=scanout(&mode);
+    nexis_gpu_scanout mode;R.active=scanout(&mode);R.audio=R.active && (mode.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0;
     if(R.active){edid_timing timing;memcpy(&timing,&mode.timing,sizeof(timing));display_set_native_mode(&timing);}
     else display_clear_native_mode();
     R.calling=false;
 }
 bool gpu_runtime_active(void){return R.active;}
+bool gpu_runtime_audio(void){return R.active && R.audio;}
 bool gpu_runtime_revert(void){
     /* Put the firmware mode back, then unload the module. The framebuffer
      * address never changed, so the desktop keeps drawing into the same memory. */

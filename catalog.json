@@ -3,10 +3,10 @@
   "packages": [
     {
       "name": "bochs",
-      "version": 1,
+      "version": 2,
       "module_bytes": 12352,
       "package_bytes": 12448,
-      "sha256": "8a2a94ef225b26a8712a41e4802f3a9dddf02c68520c3ac788b61010665af8bf",
+      "sha256": "9cb5d038b3b0c4761cd74f4c30599423803080c3d97afba337ff32ca04d00ec2",
       "vendor": "1234",
       "devices": [
         "1111"
@@ -15,6 +15,22 @@
       "status": "implemented, tested in QEMU",
       "trial": false,
       "module_memory_bytes": 16384
+    },
+    {
+      "name": "rx6600",
+      "version": 1,
+      "module_bytes": 282688,
+      "package_bytes": 282784,
+      "sha256": "e0a970cf6a894d911ddca3d53afe66fc8019206282ffe00065908ebf04919993",
+      "vendor": "1002",
+      "devices": [
+        "73ff",
+        "73ef"
+      ],
+      "title": "AMD Radeon RX 6600 / 6650 XT (Navi23, DCN 3.0.2) HDMI",
+      "status": "complete native sequence (clocks, fetch, color path, timing, PLL, SCDC, HDMI, audio endpoint) with rollback; verified against a register MODEL only, not on physical hardware",
+      "trial": true,
+      "module_memory_bytes": 647168
     }
   ]
 }

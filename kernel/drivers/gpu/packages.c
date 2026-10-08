@@ -20,6 +20,11 @@
  * the installer copies it there (gpu_install_payload).
  *
  * Safety nets for not-yet-hardware-proven drivers:
+ *   - "trial" packages wait COUNTDOWN_MS (10 s) with a visible notice before
+ *     the module is started; Esc skips the driver for this boot (the package
+ *     stays cached).  Without it a driver that hangs the machine on start-up
+ *     would hang every live-medium boot, because nothing survives the reset
+ *     there that could remember the crash.
  *   - "trial" packages show a prompt after activation: Enter keeps the new
  *     display mode, Esc (or doing nothing for 15 s) restores the firmware
  *     mode.  A blank screen therefore cannot become permanent.
@@ -27,9 +32,9 @@
  *     removed once it ended cleanly.  If the machine hangs inside the driver,
  *     the marker survives the reset and the same package version is skipped
  *     on the next boot (installed systems only; RAM-backed on live media).
- *   - Kernel options: nogpudriver (never load), gpuautokeep (no trial
- *     prompt), gpudriverlocal (download from http://10.0.2.2:8930/ for QEMU
- *     tests).
+ *   - Kernel options: nogpudriver (never load), gpuautokeep (no countdown and
+ *     no trial prompt), gpudriverlocal (download from http://10.0.2.2:8930/
+ *     for QEMU tests).
  */
 #include "packages.h"
 #include "catalog.h"
@@ -48,6 +53,7 @@
 #include "../../include/string.h"
 #include "../../sys/cmdline.h"
 #include "../../lib/coop.h"
+#include "../../audio/audio.h"
 #include "../../arch/x86_64/pit.h"
 #include "../../../gui/shell/shell.h"
 #include "../../../gui/wm/wm.h"
@@ -55,9 +61,13 @@
 #define DIR "/opt/nexis-drivers"
 #define MAX_FILE (32u + 64u + 1024u * 1024u + 64u)
 #define TRIAL_MS 15000u
+#define COUNTDOWN_MS 10000u
 
 static struct {
     bool selected, finished, polling, refresh;
+    bool audio_done;
+    unsigned audio_tries;
+    uint64_t audio_next;
     const gpu_catalog_entry *entry;
     pci_device_t *device;
     http_request_t *request;
@@ -67,7 +77,20 @@ static struct {
     bool trial;
     uint64_t trial_end;
     unsigned trial_stage;
+    /* Start-up countdown of trial packages: a private copy of the verified module waits here (the file buffers
+     * it came from are freed right after verification). The key hook only sets cancel; gpu_packages_poll acts
+     * on it, so the module never starts and gets cancelled from two contexts at once. */
+    bool pending, cancel, declined;
+    uint8_t *hold;
+    size_t hold_bytes;
+    uint32_t hold_version;
+    uint64_t countdown_end;
+    unsigned countdown_stage;
 } P;
+
+/* A driver is "engaged" while it runs, waits in the countdown, or was skipped by the user this boot:
+ * in all three cases no second load attempt may start. */
+static bool engaged(void) { return P.loaded || P.pending || P.declined; }
 
 static void path_for(char *out, size_t cap, const char *suffix) {
     snprintf(out, cap, DIR "/%s.%s", P.entry->name, suffix);
@@ -132,7 +155,13 @@ static void trial_finish(bool keep) {
 }
 
 bool gpu_trial_key(const key_event_t *ev) {
-    if (!P.trial || !ev || !ev->pressed) return false;
+    if (!ev || !ev->pressed) return false;
+    if (P.pending) { /* countdown before start: only Esc is meaningful, other keys keep working for the desktop */
+        if (ev->key != KEY_ESC) return false;
+        P.cancel = true;
+        return true;
+    }
+    if (!P.trial) return false;
     if (ev->key == KEY_ENTER || ev->key == KEY_KP_ENTER) { trial_finish(true); return true; }
     if (ev->key == KEY_ESC) { trial_finish(false); return true; }
     return false;
@@ -180,7 +209,54 @@ static void select_package(void) {
     kprintf("[GPU] Primary adapter PCI %04x:%04x -> package '%s' (hidden background job, no Store entry)\n", vendor, device, P.entry->name);
 }
 
-/* Verifies, then runs the module for the selected adapter. */
+/* Starts the verified module for the selected adapter (crash marker first, trial prompt after). */
+static bool start_module(const uint8_t *module, size_t bytes, uint32_t version) {
+    marker_set(version);
+    bool ok = gpu_runtime_load(module, bytes, P.device);
+    if (ok && P.entry->trial && !cmdline_has("gpuautokeep")) trial_begin();
+    else marker_clear();
+    if (ok) { P.loaded = true; P.loaded_version = version; }
+    return ok;
+}
+
+static void countdown_release(void) {
+    if (P.hold) kfree(P.hold);
+    P.hold = NULL;
+    P.hold_bytes = 0;
+    P.pending = false;
+}
+
+/* Runs from every poll while a trial package waits: Esc skips it for this boot, the end of the countdown starts it. */
+static void countdown_tick(void) {
+    if (!P.pending) return;
+    if (P.cancel) {
+        countdown_release();
+        P.cancel = false;
+        P.declined = true;
+        kprintf("[GPU] Driver '%s' skipped by the user; firmware display retained for this boot\n", P.entry->name);
+        notify_post("Grafiktreiber", "Uebersprungen", "Firmware-Anzeige bleibt bis zum naechsten Start.", NOTIFY_WARNING);
+        return;
+    }
+    uint64_t now = pit_get_ticks();
+    if (now >= P.countdown_end) {
+        uint8_t *module = P.hold;
+        size_t bytes = P.hold_bytes;
+        uint32_t version = P.hold_version;
+        P.hold = NULL; /* ownership moves to this frame; pending drops first so no key or poll can touch the copy */
+        P.pending = false;
+        if (!start_module(module, bytes, version)) kprintf("[GPU] Package '%s' could not be activated\n", P.entry->name);
+        kfree(module);
+        return;
+    }
+    uint64_t left = P.countdown_end - now;
+    if (P.countdown_stage == 1 && left < 5000) {
+        P.countdown_stage = 2;
+        notify_post("Grafiktreiber", "Start in 5 s", "Esc = ueberspringen", NOTIFY_WARNING);
+    }
+}
+
+/* Verifies the package. Trial packages wait in a countdown (see top of file); all others start at once.
+ * Returns false only when the package is unusable - a pending or skipped start still counts as handled. */
 static bool load_package(const uint8_t *file, size_t size, uint32_t *version) {
     gpu_package_view view;
     if (!gpu_package_open(file, size, P.entry->name, P.entry->min_version, &view)) return false;
@@ -189,12 +265,19 @@ static bool load_package(const uint8_t *file, size_t size, uint32_t *version) {
         kprintf("[GPU] Package '%s' v%u did not finish starting last time; skipped until a newer version exists\n", P.entry->name, view.version);
         return false;
     }
-    marker_set(view.version);
-    bool ok = gpu_runtime_load(view.module, view.module_bytes, P.device);
-    if (ok && P.entry->trial && !cmdline_has("gpuautokeep")) trial_begin();
-    else marker_clear();
-    if (ok) { P.loaded = true; P.loaded_version = view.version; }
-    return ok;
+    if (!P.entry->trial || cmdline_has("gpuautokeep")) return start_module(view.module, view.module_bytes, view.version);
+    P.hold = kmalloc(view.module_bytes);
+    if (!P.hold) return false;
+    memcpy(P.hold, view.module, view.module_bytes);
+    P.hold_bytes = view.module_bytes;
+    P.hold_version = view.version;
+    P.cancel = false;
+    P.pending = true;
+    P.countdown_stage = 1;
+    P.countdown_end = pit_get_ticks() + COUNTDOWN_MS;
+    kprintf("[GPU] Package '%s' v%u verified; starting in %u s unless Esc is pressed\n", P.entry->name, view.version, COUNTDOWN_MS / 1000u);
+    notify_post("Grafiktreiber", "Start in 10 s", "Esc = ueberspringen", NOTIFY_WARNING);
+    return true;
 }
 
 static void start_mirror(void) {
@@ -222,12 +305,12 @@ static void download_done(http_state_t state) {
         version = view.version;
         char path[96];
         path_for(path, sizeof path, "ndpk");
-        if (version > P.cached_version || !P.loaded) write_synced(path, data, size);
+        if (version > P.cached_version || !engaged()) write_synced(path, data, size);
         P.cached_version = version > P.cached_version ? version : P.cached_version;
-        if (!P.loaded) {
+        if (!engaged()) {
             uint32_t v;
             if (!load_package(data, size, &v)) kprintf("[GPU] Downloaded package v%u could not be activated\n", version);
-        } else if (version > P.loaded_version) {
+        } else if (P.loaded && version > P.loaded_version) {
             kprintf("[GPU] Newer package v%u cached; it is used from the next boot\n", version);
         }
         P.finished = true;
@@ -242,9 +325,25 @@ static void download_done(http_state_t state) {
     P.request = NULL;
 }
 
+/* Once the driver reports that its HDMI audio endpoint is on, move the HD-Audio driver to the HDMI codec.
+ * The codec needs a moment to see the new sink, so retry a few times; analog output keeps working meanwhile. */
+static void audio_follow(void) {
+    if (P.audio_done || !P.loaded || !gpu_runtime_audio()) return;
+    uint64_t now = pit_get_ticks();
+    if (now < P.audio_next) return;
+    P.audio_next = now + 500;
+    if (audio_rescan_hdmi()) { P.audio_done = true; kprintf("[GPU] HDMI audio output active\n"); return; }
+    if (++P.audio_tries >= 20) {
+        P.audio_done = true;
+        kprintf("[GPU] HDMI audio endpoint is on but the HD-Audio codec reports no usable sink; analog output retained\n");
+    }
+}
+
 void gpu_packages_poll(void) {
     gpu_runtime_poll();
+    countdown_tick();
     trial_tick();
+    audio_follow();
     if (P.polling || P.finished) return;
     P.polling = true;
     if (!P.selected) {
@@ -266,7 +365,7 @@ void gpu_packages_poll(void) {
             kfree(cache);
         }
         /* With a running cached driver the download is only an update check. */
-        P.refresh = P.loaded;
+        P.refresh = engaged();
     }
     if (!P.request) {
         if (!net_is_configured()) { P.polling = false; return; }

@@ -9,4 +9,6 @@ bool gpu_runtime_load(const uint8_t *,size_t,pci_device_t *);
 bool gpu_runtime_revert(void);
 void gpu_runtime_poll(void);
 bool gpu_runtime_active(void);
+/* The running native mode sends HDMI audio packets (the module's audio endpoint is on). */
+bool gpu_runtime_audio(void);
 #endif

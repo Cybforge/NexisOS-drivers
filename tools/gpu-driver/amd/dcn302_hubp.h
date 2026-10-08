@@ -27,6 +27,8 @@ enum dcn302_hubp_error dcn302_hubp_prepare(const dcn302_io *,unsigned,
  * on failure. Does not confuse OTG IN_BLANK with the drain flag.
  * Requires a powered/clocked HUBP, not an all-zero gated register bank. */
 enum dcn302_hubp_error dcn302_hubp_blank(const dcn302_io *,unsigned,uint64_t (*time_us)(void *));
+/* Make the plane visible again after the OTG runs (BLANK_EN=0, TTU_DISABLE=0). Idempotent. */
+enum dcn302_hubp_error dcn302_hubp_unblank(const dcn302_io *,unsigned);
 /* All OTGs/VTGs must be stopped. The selected HUBP must be blanked, drained,
  * enabled and clocked, with native DCN3 TTU-disable=0. Parent owns clocks, scaler/cursor proof, HUBBUB/global
  * sync and final latch/scanout validation; shadow readback is not a modeset.
