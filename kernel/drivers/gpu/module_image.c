@@ -11,7 +11,7 @@ bool nexis_gpu_image_parse(const uint8_t *data,size_t size,uint16_t vendor,uint1
     if(i.image_bytes!=size-NEXIS_GPU_V2_HEADER || !i.text_bytes || i.entry>=i.text_bytes || i.text_bytes>i.image_bytes ||
        (i.writable_offset&4095) || i.writable_offset<((i.text_bytes+4095)&~4095u) || i.writable_offset>i.image_bytes ||
        !i.memory_bytes || (i.memory_bytes&4095) || i.image_bytes>i.memory_bytes || i.memory_bytes>NEXIS_GPU_V2_MAX_BYTES ||
-       i.vendor!=vendor || i.device!=device ||
+       i.vendor!=vendor || (i.device!=0xFFFF && i.device!=device) || /* 0xFFFF: package serves several ids; the signed catalog restricts them */
        (i.services_bytes!=NEXIS_GPU_SERVICES_BASE_BYTES && i.services_bytes!=NEXIS_GPU_SERVICES_RESOURCE_BYTES))return false;
     for(unsigned n=28;n<32;n++)if(data[n])return false;
     for(unsigned n=44;n<NEXIS_GPU_V2_HEADER;n++)if(data[n])return false;

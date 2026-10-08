@@ -1,112 +1,305 @@
+/* Hidden, device-matched GPU driver packages.
+ *
+ * What happens here, in order, once the desktop is up (called from the
+ * Store's idle job poll, but there is NO Store listing for any driver):
+ *
+ *   1. Look at the primary display adapter that UEFI/GOP is using (boot info).
+ *   2. Look it up in the generated catalog (pins.h).  No match -> nothing is
+ *      downloaded or installed and the firmware framebuffer stays in use.
+ *   3. If a verified copy is already cached in /opt/nexis-drivers (installed
+ *      system) load it right away - no network needed.
+ *   4. Otherwise (live medium, or first boot after installation) download
+ *      <name>.ndpk from the GitHub mirrors in the background, verify the
+ *      ECDSA signature, cache it and activate it immediately.
+ *   5. Also refresh the cache in the background when a newer signed version
+ *      exists; a running driver is never hot-swapped, the new one is used
+ *      from the next boot.
+ *
+ * A live session keeps /opt in RAM, so it downloads again on every boot.  An
+ * installed system writes the verified package to its persistent /opt, and
+ * the installer copies it there (gpu_install_payload).
+ *
+ * Safety nets for not-yet-hardware-proven drivers:
+ *   - "trial" packages show a prompt after activation: Enter keeps the new
+ *     display mode, Esc (or doing nothing for 15 s) restores the firmware
+ *     mode.  A blank screen therefore cannot become permanent.
+ *   - /opt/nexis-drivers/<name>.try is written before a driver starts and
+ *     removed once it ended cleanly.  If the machine hangs inside the driver,
+ *     the marker survives the reset and the same package version is skipped
+ *     on the next boot (installed systems only; RAM-backed on live media).
+ *   - Kernel options: nogpudriver (never load), gpuautokeep (no trial
+ *     prompt), gpudriverlocal (download from http://10.0.2.2:8930/ for QEMU
+ *     tests).
+ */
 #include "packages.h"
+#include "catalog.h"
 #include "pins.h"
+#include "package_verify.h"
+#include "runtime.h"
 #include "../pci.h"
 #include "../framebuffer.h"
+#include "../keyboard.h"
 #include "../serial.h"
 #include "../../net/http.h"
 #include "../../net/net.h"
 #include "../../fs/vfs.h"
 #include "../../mm/heap.h"
-#include "../../mm/pmm.h"
-#include "../../mm/vmm.h"
-#include "../../security/sha256.h"
+#include "../../include/bootinfo.h"
 #include "../../include/string.h"
-#include "../../include/io.h"
 #include "../../sys/cmdline.h"
 #include "../../lib/coop.h"
 #include "../../arch/x86_64/pit.h"
+#include "../../../gui/shell/shell.h"
 #include "../../../gui/wm/wm.h"
-#include "../../../tools/gpu-driver/include/nexis_gpu.h"
-#define MODULE_VA 0xffffa00000000000ULL
-#define CACHE "/opt/nexis-drivers/bochs.ndrv"
-static pci_device_t *device;
-static http_request_t *request;
-static bool selected,active,finished,polling;
-static uint32_t u32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24;}
-static uint64_t bar(pci_device_t *d,unsigned index){
- uint32_t lo=pci_read_dword(d->bus,d->slot,d->func,0x10+index*4);if(!lo || lo&1)return 0;
- if((lo&6)==4){if(index>=5)return 0;return (uint64_t)pci_read_dword(d->bus,d->slot,d->func,0x14+index*4)<<32|(lo&~15u);}
- if(lo&6)return 0;return lo&~15u;
+
+#define DIR "/opt/nexis-drivers"
+#define MAX_FILE (32u + 64u + 1024u * 1024u + 64u)
+#define TRIAL_MS 15000u
+
+static struct {
+    bool selected, finished, polling, refresh;
+    const gpu_catalog_entry *entry;
+    pci_device_t *device;
+    http_request_t *request;
+    unsigned mirror;
+    bool loaded;
+    uint32_t loaded_version, cached_version, marker_version;
+    bool trial;
+    uint64_t trial_end;
+    unsigned trial_stage;
+} P;
+
+static void path_for(char *out, size_t cap, const char *suffix) {
+    snprintf(out, cap, DIR "/%s.%s", P.entry->name, suffix);
 }
-static bool valid(const uint8_t *data,size_t size){
- if(!data || size<=16 || size>65552 || memcmp(data,"NDRV",4) || u32(data+4)!=NEXIS_GPU_ABI || u32(data+12)!=size-16 || u32(data+8)>=size-16)return false;
- uint8_t digest[32];sha256_hash(data,size,digest);return !memcmp(digest,bochs_sha256,32);
+
+/* Reads a whole file from the VFS under the read lock. Caller frees. */
+static uint8_t *read_file(const char *path, size_t *size) {
+    vfs_node_t *node = vfs_lookup(path);
+    if (!node || node->flags != VFS_FILE || node->length < 100 || node->length > MAX_FILE || !vfs_read_lock(node)) return NULL;
+    uint8_t *data = vfs_read_file(path, size);
+    vfs_read_unlock(node);
+    return data;
 }
-static int activate(uint64_t base,uint32_t pitch,uint32_t format,const char *name){
- bool ok=fb_native_activate(base,pitch,format,name);
- if(!ok)kprintf("[GPU] Framebuffer attach rejected: base %llx/%llx pitch %u/%u format %u name %u back %p size %llu\n",base,fb_front_base(),pitch,fb_get_pitch(),format,name?(unsigned)(uint8_t)*name:0,fb_get_backbuffer(),fb_front_size());
- return ok?0:-1;
+
+static void write_synced(const char *path, const void *data, size_t size) {
+    if (!vfs_write_file(path, data, size)) { kprintf("[GPU] Cannot write %s\n", path); return; }
+    vfs_node_t *n = vfs_lookup(path);
+    if (n) { vfs_chmod_node(n, 0644); vfs_sync_node(n); }
 }
-static uint8_t *cached(size_t *size){
- vfs_node_t *node=vfs_lookup(CACHE);if(!node || node->flags!=VFS_FILE || node->length<=16 || node->length>65552 || !vfs_read_lock(node))return NULL;
- uint8_t *data=vfs_read_file(CACHE,size);vfs_read_unlock(node);return data;
+
+static void marker_set(uint32_t version) {
+    char path[96], text[24];
+    path_for(path, sizeof path, "try");
+    snprintf(text, sizeof text, "%u\n", version);
+    write_synced(path, text, strlen(text));
 }
-void *gpu_install_payload(size_t *size){
- if(!device)return NULL;uint8_t *data=cached(size);if(data && !valid(data,*size)){kfree(data);return NULL;}return data;
+static void marker_clear(void) {
+    char path[96];
+    path_for(path, sizeof path, "try");
+    if (vfs_lookup(path)) vfs_remove(path);
 }
-static bool load(const uint8_t *data,size_t size){
- if(!valid(data,size) || !device)return false;
- uint64_t aperture=bar(device,0),regs=bar(device,2);
- /* Version 1 only takes over the known firmware aperture, with unchanged
-  * geometry. Never treat an arbitrary PCI BAR as writable system memory. */
- if(!aperture || aperture!=fb_front_base() || !regs || regs<0x10000000 || regs>=1ULL<<47 || regs&4095 ||
-    !(pci_read_word(device->bus,device->slot,device->func,4)&2)){kprintf("[GPU] Incompatible aperture %llx (firmware %llx), registers %llx\n",aperture,fb_front_base(),regs);return false;}
- if(!vmm_map_mmio(regs,4096)){kprintf("[GPU] Register map failed\n");return false;}
- size_t bytes=size-16,pages=(bytes+4095)/4096;uint64_t phys=pmm_alloc_pages(pages);if(!phys)return false;
- bool ok=true;size_t mapped=0;
- uint64_t flags;__asm__ volatile("pushfq; popq %0; cli":"=r"(flags)::"memory");
- uint64_t original=read_cr3();vmm_switch_pml4(vmm_get_kernel_pml4());
- for(size_t i=0;i<pages;i++)if(!vmm_map_page(vmm_get_kernel_pml4(),MODULE_VA+i*4096,phys+i*4096,PAGE_PRESENT|PAGE_WRITABLE|PAGE_NO_EXECUTE)){ok=false;break;}else mapped++;
- if(ok){
-  memcpy((void *)(uintptr_t)MODULE_VA,data+16,bytes);
-  for(size_t i=0;i<pages;i++)if(!vmm_map_page(vmm_get_kernel_pml4(),MODULE_VA+i*4096,phys+i*4096,PAGE_PRESENT)){ok=false;break;}
- }
- if(ok){
-  nexis_gpu_context c={NEXIS_GPU_ABI,fb_get_width(),fb_get_height(),fb_get_pitch(),fb_is_rgb()?0:1,0,aperture,fb_front_size(),regs,activate};
-  int (*entry)(const nexis_gpu_context *)=(void *)(uintptr_t)(MODULE_VA+u32(data+8));int result=entry(&c);ok=result==0;if(!ok)kprintf("[GPU] Module initialization returned %d\n",result);
- }
- for(size_t i=0;i<mapped;i++)vmm_unmap_page(vmm_get_kernel_pml4(),MODULE_VA+i*4096);
- for(size_t i=0;i<pages;i++)pmm_free_page(phys+i*4096);
- write_cr3(original);if(flags&(1u<<9))sti();
- if(ok){wm_damage_all();kprintf("[GPU] Native driver active: %s (external SHA-256 verified module)\n",fb_driver_name());}
- return ok;
+static uint32_t marker_read(void) {
+    char path[96];
+    path_for(path, sizeof path, "try");
+    vfs_node_t *n = vfs_lookup(path);
+    if (!n || n->flags != VFS_FILE || n->length == 0 || n->length > 32) return 0;
+    size_t size = 0;
+    uint8_t *d = vfs_read_file(path, &size);
+    if (!d) return 0;
+    uint32_t v = 0;
+    for (size_t i = 0; i < size && d[i] >= '0' && d[i] <= '9'; i++) v = v * 10 + (d[i] - '0');
+    kfree(d);
+    return v ? v : 0xffffffffu; /* unreadable marker still blocks */
 }
-void gpu_packages_poll(void){
- if(polling || finished)return;polling=true;
- if(!selected){
-  selected=true;
-  if(!cmdline_has("nogpudriver"))for(pci_device_t *d=pci_get_device_list();d;d=d->next)if(d->class_id==3 && d->vendor_id==0x1234 && d->device_id==0x1111 && bar(d,0)==fb_front_base()){device=d;break;}
-  if(!device){finished=true;polling=false;return;}
-  size_t size=0;uint8_t *cache=cached(&size);
-  if(cache){active=load(cache,size);kfree(cache);if(active){finished=true;polling=false;return;}kprintf("[GPU] Cached driver does not match this kernel/device; downloading pinned version\n");}
- }
- if(!request){
-  if(!net_is_configured()){polling=false;return;}
-  http_options_t opts={0};opts.url=cmdline_has("gpudriverlocal")?"http://10.0.2.2:8930/bochs.ndrv":BOCHS_DRIVER_URL;
-  opts.max_body=65552;opts.timeout_ms=15000;opts.no_cookies=true;opts.identity_encoding=true;request=http_request_start(&opts);
-  if(!request){finished=true;polling=false;return;}
-  kprintf("[GPU] Background download for PCI 1234:1111, not a Store listing\n");
- }
- if(request){
-  http_state_t state=http_request_poll(request);
-  if(state!=HTTP_PENDING){
-   size_t size=0;const uint8_t *data=http_body(request,&size);
-   if(state==HTTP_DONE && http_status(request)==200 && valid(data,size)){
-    /* Cache before executing. The installed root binds /opt persistently;
-     * live sessions keep this file in RAM, so every boot downloads again. */
-    if(vfs_write_file(CACHE,data,size)){vfs_node_t *n=vfs_lookup(CACHE);if(n){vfs_chmod_node(n,0644);vfs_sync_node(n);}active=load(data,size);}else kprintf("[GPU] Cannot write driver cache\n");
-   }else kprintf("[GPU] Download failed or checksum mismatch (HTTP %d, %u bytes)\n",http_status(request),(unsigned)size);
-   if(!active)kprintf("[GPU] External driver unavailable/rejected; firmware display retained\n");
-   http_request_free(request);request=NULL;finished=true;
-  }
- }
- polling=false;
+
+/* ---- trial prompt ------------------------------------------------------- */
+
+static void trial_finish(bool keep) {
+    P.trial = false;
+    if (keep) {
+        marker_clear();
+        kprintf("[GPU] Display mode confirmed by the user\n");
+        notify_post("Grafiktreiber", "Anzeigemodus behalten", "Der native Treiber bleibt aktiv.", NOTIFY_SUCCESS);
+        return;
+    }
+    bool ok = gpu_runtime_revert();
+    marker_clear(); /* a clean, user-visible revert is not a crash */
+    P.loaded = false;
+    kprintf("[GPU] Display mode reverted to firmware output (%s)\n", ok ? "ok" : "restore failed");
+    notify_post("Grafiktreiber", ok ? "Zurueckgesetzt" : "Zuruecksetzen fehlgeschlagen",
+                ok ? "Firmware-Anzeige wieder aktiv." : "Bitte neu starten (Option nogpudriver).", ok ? NOTIFY_WARNING : NOTIFY_ERROR);
 }
-bool gpu_driver_active(void){return active;}
-void gpu_prepare_install(void){
- /* Complete the selected download before the installer copies its verified cache to /opt. Keep
-  * installation usable offline; a missing driver is retried on the next boot. */
- uint64_t end=pit_get_ticks()+5000;
- do{gpu_packages_poll();if(finished)break;net_poll();coop_yield_check();}while(pit_get_ticks()<end);
- if(request){http_request_free(request);request=NULL;finished=true;kprintf("[GPU] Installer: download deferred until next boot\n");}
+
+bool gpu_trial_key(const key_event_t *ev) {
+    if (!P.trial || !ev || !ev->pressed) return false;
+    if (ev->key == KEY_ENTER || ev->key == KEY_KP_ENTER) { trial_finish(true); return true; }
+    if (ev->key == KEY_ESC) { trial_finish(false); return true; }
+    return false;
+}
+
+static void trial_tick(void) {
+    if (!P.trial) return;
+    uint64_t now = pit_get_ticks();
+    if (now >= P.trial_end) { trial_finish(false); return; }
+    uint64_t left = P.trial_end - now;
+    if (P.trial_stage == 1 && left < 10000) { P.trial_stage = 2; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Noch 10 s bis zum Rueckfall", NOTIFY_WARNING); }
+    else if (P.trial_stage == 2 && left < 5000) { P.trial_stage = 3; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Noch 5 s bis zum Rueckfall", NOTIFY_WARNING); }
+}
+
+static void trial_begin(void) {
+    P.trial = true;
+    P.trial_end = pit_get_ticks() + TRIAL_MS;
+    P.trial_stage = 1;
+    notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Ohne Eingabe: Rueckfall in 15 s", NOTIFY_WARNING);
+}
+
+/* ---- package selection / loading --------------------------------------- */
+
+static bool entry_matches(const gpu_catalog_entry *e, uint16_t vendor, uint16_t device) {
+    if (e->vendor != vendor) return false;
+    for (unsigned i = 0; i < e->device_count; i++) if (e->devices[i] == device) return true;
+    return false;
+}
+
+static void select_package(void) {
+    P.selected = true;
+    if (cmdline_has("nogpudriver")) { kprintf("[GPU] Driver loading disabled (nogpudriver)\n"); P.finished = true; return; }
+    const nexis_boot_info_t *boot = bootinfo_get();
+    if (!boot || !boot->gpu_vendor) { P.finished = true; return; }
+    uint16_t vendor = boot->gpu_vendor, device = boot->gpu_device;
+    uint8_t bus = boot->gpu_bus, slot = boot->gpu_slot, func = boot->gpu_func;
+    for (pci_device_t *d = pci_get_device_list(); d; d = d->next)
+        if (d->class_id == 3 && d->vendor_id == vendor && d->device_id == device && d->bus == bus && d->slot == slot && d->func == func) { P.device = d; break; }
+    for (unsigned i = 0; i < GPU_CATALOG_COUNT; i++) if (entry_matches(&gpu_catalog[i], vendor, device)) { P.entry = &gpu_catalog[i]; break; }
+    if (!P.device || !P.entry) {
+        kprintf("[GPU] No driver package for PCI %04x:%04x; firmware framebuffer retained, nothing downloaded\n", vendor, device);
+        P.finished = true;
+        return;
+    }
+    kprintf("[GPU] Primary adapter PCI %04x:%04x -> package '%s' (hidden background job, no Store entry)\n", vendor, device, P.entry->name);
+}
+
+/* Verifies, then runs the module for the selected adapter. */
+static bool load_package(const uint8_t *file, size_t size, uint32_t *version) {
+    gpu_package_view view;
+    if (!gpu_package_open(file, size, P.entry->name, P.entry->min_version, &view)) return false;
+    *version = view.version;
+    if (P.marker_version && view.version <= P.marker_version) {
+        kprintf("[GPU] Package '%s' v%u did not finish starting last time; skipped until a newer version exists\n", P.entry->name, view.version);
+        return false;
+    }
+    marker_set(view.version);
+    bool ok = gpu_runtime_load(view.module, view.module_bytes, P.device);
+    if (ok && P.entry->trial && !cmdline_has("gpuautokeep")) trial_begin();
+    else marker_clear();
+    if (ok) { P.loaded = true; P.loaded_version = view.version; }
+    return ok;
+}
+
+static void start_mirror(void) {
+    char url[160];
+    if (cmdline_has("gpudriverlocal")) snprintf(url, sizeof url, "http://10.0.2.2:8930/%s.ndpk", P.entry->name);
+    else snprintf(url, sizeof url, "%s%s.ndpk", gpu_mirrors[P.mirror], P.entry->name);
+    http_options_t opts = {0};
+    opts.url = url; opts.max_body = MAX_FILE; opts.timeout_ms = 15000; opts.no_cookies = true; opts.identity_encoding = true;
+    P.request = http_request_start(&opts);
+    if (P.request) kprintf("[GPU] Background download of package '%s' (%s)\n", P.entry->name, P.refresh ? "update check" : "driver needed");
+}
+
+static void next_mirror_or_finish(void) {
+    if (!cmdline_has("gpudriverlocal") && ++P.mirror < GPU_MIRROR_COUNT) return; /* try the next mirror on the next poll */
+    P.finished = true;
+    if (!P.loaded && !P.refresh) kprintf("[GPU] Driver unavailable; firmware display retained\n");
+}
+
+static void download_done(http_state_t state) {
+    size_t size = 0;
+    const uint8_t *data = http_body(P.request, &size);
+    uint32_t version = 0;
+    gpu_package_view view;
+    if (state == HTTP_DONE && http_status(P.request) == 200 && gpu_package_open(data, size, P.entry->name, P.entry->min_version, &view)) {
+        version = view.version;
+        char path[96];
+        path_for(path, sizeof path, "ndpk");
+        if (version > P.cached_version || !P.loaded) write_synced(path, data, size);
+        P.cached_version = version > P.cached_version ? version : P.cached_version;
+        if (!P.loaded) {
+            uint32_t v;
+            if (!load_package(data, size, &v)) kprintf("[GPU] Downloaded package v%u could not be activated\n", version);
+        } else if (version > P.loaded_version) {
+            kprintf("[GPU] Newer package v%u cached; it is used from the next boot\n", version);
+        }
+        P.finished = true;
+    } else {
+        kprintf("[GPU] Download failed or signature rejected (HTTP %d, %u bytes)\n", http_status(P.request), (unsigned)size);
+        http_request_free(P.request);
+        P.request = NULL;
+        next_mirror_or_finish();
+        return;
+    }
+    http_request_free(P.request);
+    P.request = NULL;
+}
+
+void gpu_packages_poll(void) {
+    gpu_runtime_poll();
+    trial_tick();
+    if (P.polling || P.finished) return;
+    P.polling = true;
+    if (!P.selected) {
+        select_package();
+        if (P.finished) { P.polling = false; return; }
+        P.marker_version = marker_read();
+        size_t size = 0;
+        uint8_t *cache = NULL;
+        char path[96];
+        path_for(path, sizeof path, "ndpk");
+        cache = read_file(path, &size);
+        if (cache) {
+            gpu_package_view view;
+            if (gpu_package_open(cache, size, P.entry->name, P.entry->min_version, &view)) {
+                P.cached_version = view.version;
+                uint32_t v;
+                if (!load_package(cache, size, &v)) kprintf("[GPU] Cached package not usable; downloading\n");
+            } else kprintf("[GPU] Cached package rejected (old format or invalid signature); downloading\n");
+            kfree(cache);
+        }
+        /* With a running cached driver the download is only an update check. */
+        P.refresh = P.loaded;
+    }
+    if (!P.request) {
+        if (!net_is_configured()) { P.polling = false; return; }
+        start_mirror();
+        if (!P.request) { next_mirror_or_finish(); P.polling = false; return; }
+    }
+    http_state_t state = http_request_poll(P.request);
+    if (state != HTTP_PENDING) download_done(state);
+    P.polling = false;
+}
+
+bool gpu_driver_active(void) { return P.loaded || gpu_runtime_active(); }
+
+/* The installer copies the verified, cached package into the new system's
+ * persistent /opt so the first boot after installation needs no network. */
+void *gpu_install_payload(size_t *size, char name[16]) {
+    /* Any verified cached package for the matching adapter is persisted, even
+     * if activation failed here; a newer version is fetched on the next boot. */
+    if (!P.entry) return NULL;
+    char path[96];
+    path_for(path, sizeof path, "ndpk");
+    uint8_t *data = read_file(path, size);
+    gpu_package_view view;
+    if (data && !gpu_package_open(data, *size, P.entry->name, P.entry->min_version, &view)) { kfree(data); return NULL; }
+    if (data) { strncpy(name, P.entry->name, 15); name[15] = 0; }
+    return data;
+}
+
+void gpu_prepare_install(void) {
+    /* Let the selected download finish before the installer copies the cache.
+     * Installation stays usable offline; a missing driver is fetched on the
+     * first boot of the installed system. */
+    uint64_t end = pit_get_ticks() + 5000;
+    do { gpu_packages_poll(); if (P.finished) break; net_poll(); coop_yield_check(); } while (pit_get_ticks() < end);
+    if (P.request) { http_request_free(P.request); P.request = NULL; P.finished = true; kprintf("[GPU] Installer: download deferred until next boot\n"); }
 }

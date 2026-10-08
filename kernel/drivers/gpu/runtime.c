@@ -7,17 +7,17 @@
 #include "../../include/string.h"
 #include "../../mm/pmm.h"
 #include "../../mm/vmm.h"
-#include "../../security/sha256.h"
 #include "../../arch/x86_64/pit.h"
 #include "../../../tools/gpu-driver/include/nexis_gpu_v2.h"
 #define BASE GPU_MODULE_VIRTUAL_BASE
 static struct {
-    bool resident,active,calling;
+    bool resident,active,calling,have_initial;
     uint64_t physical,last_poll_us,bar[6],bar_bytes[6];size_t pages,mapped;
     nexis_gpu_image image;
     nexis_gpu_services services;
     nexis_gpu_instance driver;
     nexis_gpu_resource resources[6];
+    nexis_gpu_scanout initial; /* firmware (GOP) mode read before the first set_mode; target of gpu_runtime_revert() */
     pci_device_t device;
     char name[64];
 } R;
@@ -119,10 +119,11 @@ static bool scanout(nexis_gpu_scanout *mode){
         t.vactive<t.vsync_start && t.vsync_start<t.vsync_end && t.vsync_end<=t.vtotal && t.vtotal<=65536 &&
         t.clock_khz && t.clock_khz<=R.driver.max_pixel_khz && edid_refresh_millihz(&t)>=20000 && edid_refresh_millihz(&t)<=1000000;
 }
-bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32],pci_device_t *device){
-    if(R.resident || R.calling || !device || !data || !expected || device->class_id!=3)return false;
+bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
+    /* The caller (packages.c) has already verified the ECDSA signature of the
+     * package that carries this module; here only structure and device match. */
+    if(R.resident || R.calling || !device || !data || device->class_id!=3)return false;
     nexis_gpu_image image;if(!nexis_gpu_image_parse(data,bytes,device->vendor_id,device->device_id,&image))return false;
-    uint8_t digest[32];sha256_hash(data,bytes,digest);if(memcmp(expected,digest,32))return false;
     const nexis_boot_info_t *boot=bootinfo_get();
     if(!boot || boot->gpu_vendor!=device->vendor_id || boot->gpu_device!=device->device_id || boot->gpu_bus!=device->bus ||
        boot->gpu_slot!=device->slot || boot->gpu_func!=device->func || !device_ready(device))return false;
@@ -167,8 +168,14 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,const uint8_t expected[32
     int result=entry(&R.services,&R.driver);R.calling=false;
     if(result || !validate_driver()){kprintf("[GPU] Retained module initialization rejected (%d)\n",result);release(false);return false;}
     const edid_monitor *monitor=display_monitor_get();nexis_gpu_scanout actual;
+    /* Remember the firmware mode so a trial can be reverted. */
+    R.have_initial=scanout(&R.initial);
     edid_timing desired={0};edid_link_limits limits={R.driver.max_pixel_khz,R.driver.max_tmds_khz,R.driver.hdmi,R.driver.scdc};
     const edid_timing *chosen=monitor?edid_select_rgb8(monitor,fb_get_width(),fb_get_height(),&limits):NULL;
+    if(chosen && !R.have_initial){
+        /* Never change a mode that cannot be restored. */
+        kprintf("[GPU] Firmware mode could not be read back; native mode change refused\n");release(true);return false;
+    }
     if(chosen){
         desired=*chosen;
         desired.flags&=3u;nexis_gpu_timing target;memcpy(&target,&desired,sizeof(target));
@@ -192,3 +199,17 @@ void gpu_runtime_poll(void){
     R.calling=false;
 }
 bool gpu_runtime_active(void){return R.active;}
+bool gpu_runtime_revert(void){
+    /* Put the firmware mode back, then unload the module. The framebuffer
+     * address never changed, so the desktop keeps drawing into the same memory. */
+    if(!R.resident || R.calling)return false;
+    bool ok=false;nexis_gpu_scanout now;
+    if(R.have_initial){
+        R.calling=true;
+        ok=R.driver.set_mode(R.driver.state,&R.initial.timing) && scanout(&now) &&
+           nexis_gpu_mode_readback_matches(&now,&R.initial.timing);
+        R.calling=false;
+    }
+    release(true);fb_native_deactivate();
+    return ok;
+}

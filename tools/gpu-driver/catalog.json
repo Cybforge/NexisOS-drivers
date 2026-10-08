@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "comment": "Source of truth for the hidden GPU driver packages. scripts/build_gpu_catalog.py builds every package listed here, signs it, writes kernel/drivers/gpu/pins.h (matching table + public key) and build/gpu-drivers/ (what is uploaded to GitHub). There is deliberately NO Store listing for any of these packages: the kernel detects the primary display adapter and downloads only the matching package in the background.",
+  "mirrors": [
+    "https://raw.githubusercontent.com/Cybforge/NexisOS-drivers/main/packages/",
+    "https://raw.githubusercontent.com/jojojonas169-debug/NexisOS-drivers/main/packages/"
+  ],
+  "packages": [
+    {
+      "name": "bochs",
+      "title": "QEMU standard VGA / Bochs (virtual test device)",
+      "vendor": "1234",
+      "devices": ["1111"],
+      "version": 1,
+      "min_version": 1,
+      "trial": false,
+      "status": "implemented, tested in QEMU",
+      "sources": [
+        "tools/gpu-driver/bochs/bochs_v2.c",
+        "tools/gpu-driver/common/memory.c"
+      ]
+    }
+  ]
+}
