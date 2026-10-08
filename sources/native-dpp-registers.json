@@ -1,0 +1,24 @@
+{
+  "source": "AMD Linux v6.12",
+  "upstream_sha256": {
+    "dcn302_offset.h": "052c86b51b20d93b99c95b2556fd68b4ecd5ae2388c59a8b2b08a4a00e2ea780",
+    "dcn302_mask.h": "8491525dd88e7ee6fec5f926ee93ee1a2d16953428637325bfd2aaa98c77822b",
+    "dimgrey_cavefish_ip_offset.h": "cd6b042e6ec1e8f71549828fa225182b0bb00c7be6b556ad0d3591d200afedf2",
+    "dcn302_resource.c": "54362248c36a9ee830042b6a220637ff678b56cb6772fd3f43139a9315cca4bc",
+    "dcn30_resource.c": "4cbc395956fb8349cfb187a5818b8297ec942d5e1ad481768db4fb20902aaff2",
+    "dcn30_dpp.c": "7b27b1c37f2144a8e6fa45edb17c277ab5320fcfed3e931b784bacb7956b4b7a",
+    "dcn20_dpp.c": "50a4348765cb83a5ae6c113c21c97447bbe56eb9bd2375d3f993d54b9fc37429",
+    "dcn10_dpp_dscl.c": "a0ad94be8d89e0856dbc63c58fd79e5870f05740fcf6153ffe9d34100d86d507",
+    "dcn10_dpp_cm.c": "0f008fdefd62ae7d7e59e236d9ecd1771f995cceb08c89601f8cd3a943554488",
+    "dcn30_dpp.h": "7cd211a82e9f89adba074d97ecd53c1e237be4965327df9c2adce184c9d21935",
+    "dcn20_hubp.h": "4f633a0658972f0e02b6af0833308c35914511f4ccdfa99e206b9c48db98987a"
+  },
+  "registers": 24,
+  "owned_registers": 18,
+  "fields": 38,
+  "native_dcn3_float_line_buffer": true,
+  "native_dcn3_dml_lb16_verified": true,
+  "shared_hubp_dpp_cursor_address_verified": true,
+  "native_dcn3_cnv_rgb8_and_color_bypass": true,
+  "generated_sha256": "17ee9781f0c1df247c0520902ab7ce0272c21682cc7bb1efa5ba3e59fcab6d78"
+}

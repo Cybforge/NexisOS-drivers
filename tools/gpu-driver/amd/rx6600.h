@@ -9,9 +9,11 @@
 #include "dcn302_hubp.h"
 #include "dcn302_hubbub.h"
 #include "dcn302_timing.h"
+#include "dcn302_dpp.h"
 enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
 enum rx6600_hubp_operation {RX6600_HUBP_PREPARE,RX6600_HUBP_BLANK,RX6600_HUBP_APPLY,RX6600_HUBP_RESTORE,RX6600_HUBP_CANCEL};
 enum rx6600_timing_operation {RX6600_TIMING_APPLY,RX6600_TIMING_RESTORE};
+enum rx6600_dpp_operation {RX6600_DPP_APPLY,RX6600_DPP_RESTORE};
 enum rx6600_error {RX6600_OK,RX6600_INPUT,RX6600_RESOURCE,RX6600_ROM,RX6600_BOARD,RX6600_ROUTE,RX6600_SURFACE,RX6600_CLOCK,RX6600_CHANGED,RX6600_MODESET_PENDING,RX6600_SMU,RX6600_MEMORY,RX6600_BANDWIDTH};
 typedef struct {
     const nexis_gpu_services *services;
@@ -30,6 +32,7 @@ typedef struct {
     dcn302_hubp_transaction hubp_transaction;
     dcn302_hubbub_transaction hubbub_transaction;
     dcn302_timing_transaction timing_transaction;
+    dcn302_dpp_transaction dpp_transaction;
     dcn302_dfs_snapshot hubp_clock_target;
     uint32_t hubp_floor_mhz[4];
     /* Retained native clock operation for the modeset transaction. The module
@@ -44,9 +47,12 @@ typedef struct {
      * Other operations take NULL timing and false. */
     bool (NEXIS_GPU_CALL *bandwidth_registers)(void *,const nexis_gpu_timing *,bool,enum rx6600_hubp_operation);
     /* PREPARE above also binds native global sync to the same DML result.
-     * Apply only after fetch/WM are installed. Restore timing before fetch,
+     * Apply only after fetch/WM and DPP are installed. Restore timing before DPP/fetch,
      * policy or clocks; every timing write re-proves the parent state. */
     bool (NEXIS_GPU_CALL *timing_registers)(void *,enum rx6600_timing_operation);
+    /* Native float linebuffer/scaler and both physical cursor enables.
+     * Apply after fetch/WM; restore after timing and before fetch/WM/clocks. */
+    bool (NEXIS_GPU_CALL *dpp_registers)(void *,enum rx6600_dpp_operation);
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
     uint64_t sampled_us;uint32_t sampled_frame;
@@ -66,8 +72,9 @@ typedef struct {
  * and memory clock change while this fixed-floor plan is installed.
  * It binds native stopped timing/global sync to that DML result and retains
  * the DCN3 update-lock/buffer transaction with guarded reverse rollback.
- * It does not yet prove no native scaler/cursor,
- * or complete pixel PLL/PHY/audio. This is not a completed card driver and
+ * It installs the native float-format 1:1 scaler/linebuffer and disables
+ * both physical cursors under those guards. Pixel PLL/PHY/audio and actual
+ * activation remain incomplete. This is not a completed card driver and
  * must not enter the download catalog yet. */
 enum rx6600_error rx6600_probe(rx6600_state *,const nexis_gpu_services *);
 bool rx6600_read_mode(rx6600_state *,nexis_gpu_scanout *);

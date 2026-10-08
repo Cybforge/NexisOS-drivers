@@ -71,7 +71,10 @@ __attribute__((used,noinline)) static void NEXIS_GPU_CALL calculate(void *contex
     dst->vblank_nom=t->vtotal-t->vactive;dst->pixel_rate_mhz=t->pixel_khz/1000.0;dst->otg_inst=i->pipe;
     p->pipe.scale_ratio_depth.hscl_ratio=p->pipe.scale_ratio_depth.vscl_ratio=1;
     p->pipe.scale_ratio_depth.hscl_ratio_c=p->pipe.scale_ratio_depth.vscl_ratio_c=1;
-    p->pipe.scale_ratio_depth.lb_depth=dm_lb_8;p->pipe.scale_taps.htaps=p->pipe.scale_taps.vtaps=1;
+    /* DCN302 inherits dcn30_populate_dml_pipes_from_context: its float-format
+     * line buffer is modeled at 16 bits/channel, even for RGB8 scanout. Using
+     * the source depth (8) understated native LB consumption by a factor of2. */
+    p->pipe.scale_ratio_depth.lb_depth=dm_lb_16;p->pipe.scale_taps.htaps=p->pipe.scale_taps.vtaps=1;
     p->pipe.scale_taps.htaps_c=p->pipe.scale_taps.vtaps_c=1;
     p->dout.output_type=dm_hdmi;p->dout.output_format=dm_444;p->dout.output_bpp=24;p->dout.output_bpc=8;p->dout.dsc_input_bpc=8;
     p->clks_cfg.refclk_mhz=i->ref_khz/1000.0;p->clks_cfg.dcfclk_mhz=s->dcfclk_mhz;p->clks_cfg.socclk_mhz=s->socclk_mhz;

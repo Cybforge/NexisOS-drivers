@@ -55,6 +55,7 @@ int main(int argc,char **argv){
     dcn302_dml_job j={.input=fixture(),.workspace=&workspace};unsigned line=0;
     enum nexis_dml_scope_result result=dcn302_dml_calculate(&j,&line);cases++;
     CHECK(result==NEXIS_DML_SCOPE_OK && j.error==DCN302_DML_OK && !line);
+    CHECK(workspace.pipe.pipe.scale_ratio_depth.lb_depth==dm_lb_16 && workspace.lib.vba.LBBitPerPixel[0]==48);
     CHECK(j.output.disp_khz>=148500 && j.output.dpp_khz>0 && j.output.vstartup>0);
     dcn302_dml_output first=j.output;
     CHECK(dcn302_dml_calculate(&j,&line)==NEXIS_DML_SCOPE_OK && j.error==DCN302_DML_OK);cases++;
@@ -70,6 +71,7 @@ int main(int argc,char **argv){
         j.input=fixture();j.input.timing=modes[m];j.input.pitch_pixels=(modes[m].hactive+63)&~63u;
         result=dcn302_dml_calculate(&j,&line);cases++;
         CHECK(result==NEXIS_DML_SCOPE_OK && j.error==DCN302_DML_OK && !line);
+        CHECK(workspace.pipe.pipe.scale_ratio_depth.lb_depth==dm_lb_16 && workspace.lib.vba.LBBitPerPixel[0]==48);
         CHECK(j.output.disp_khz>=modes[m].pixel_khz && j.output.urgent_ns>=4000);
         CHECK(j.output.vstartup>=1 && j.output.vstartup<modes[m].vtotal-modes[m].vactive);
         double nom=workspace.lib.vba.FractionOfUrgentBandwidth*1000;

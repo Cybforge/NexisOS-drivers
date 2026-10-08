@@ -1,7 +1,7 @@
 {
   "passed": true,
   "cases": 467,
-  "checks": 919,
+  "checks": 925,
   "workspace_bytes": 217688,
   "pure_native_dcn302_bandwidth_math": true,
   "tested_1080p_240hz_math": true,
@@ -19,15 +19,15 @@
     "bytes": 143424,
     "memory_bytes": 364544,
     "services_bytes": 112,
-    "sha256": "3492427de70fa64d59212a1e84b62f226c8e39f99ca2cdbce3d0189affc5195e"
+    "sha256": "2938d9034347c78915f86282302817a9c2f2153168494176a765e88634bf8711"
   },
   "distributed": false,
   "full_rx6600_driver_complete": false,
   "physical_gpu_drivers_complete": 0,
   "source_sha256": {
-    "tests/host/test_dcn302_dml.c": "b138a32aa8f17db154bbe258f2b87ed34186773e146e2980d174c2aa842e5c7c",
+    "tests/host/test_dcn302_dml.c": "2c19b05c96006f15a53f6baa429c161d139d034b8aa39b0aa9f3f60dba00c5a6",
     "kernel/drivers/gpu/module_image.c": "8819b93bfd4728b51a287180b645b8dc38823a3b57d8a1afc55f3fb42cdac4bd",
-    "tools/gpu-driver/amd/dcn302_dml.c": "980fe9cd8c540381f1ab654fad5cb6d67416b87761047129343baa7229206bef",
+    "tools/gpu-driver/amd/dcn302_dml.c": "5770af3fa533fff0ce2d62426a293fac851fee707ceb5d732f33c9535750aaca",
     "tools/gpu-driver/amd/dml/nexis_dml_port.c": "2bdec7291fde6abe37e35c0b8230e2772274369390fcf1621db3ea3e5b2f711f",
     "tools/gpu-driver/amd/dml/display_mode_vba.c": "c8e451ac96f1fedd512b65e91e18e6ef5eeb9839227cd4a6a3af61b814789ba3",
     "tools/gpu-driver/amd/dml/display_mode_vba_30.c": "43ef28b16d82da407ab500374b41c18da533c170e6cab03f5c5c2d8b974d146c",

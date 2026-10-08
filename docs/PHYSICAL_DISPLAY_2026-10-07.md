@@ -9,6 +9,42 @@ implemented or verified.** Bochs/QEMU support does not count as a physical drive
 
 ## Latest external native code after r4
 
+The latest source increment adds the native DPP scaler/color/cursor transaction.
+It programs RGB8888 conversion and identity CNV crossbar, bypasses unity
+pre-degamma/CSC/CM and disables alpha/color key. Full recout/MPC dimensions,
+float linebuffer configuration0/max63 and native mode0 provide the RGB8 1:1
+scaling path. Mode6 is not the DCN3 identity path. HUBP and DPP use the same
+physical CURSOR_CONTROL; the separate CNVC cursor enable is also disabled.
+The generator verifies actual DCN3 callback inheritance against pinned AMD
+v6.12 sources: 24 native registers, 18 owned configuration registers, 38 fields.
+Read-only pending/current/partition status is excluded, unrelated RW retained.
+No absent old DCN1 DGAM register is guessed into the DCN3 color path.
+
+This found and corrected a bandwidth-model bug: DCN3.02 stores linebuffer
+components at 16 bits each internally, including RGB8 input. The DML adapter
+previously selected 8 bits, understating storage by two. It now selects
+`dm_lb_16`/48-bpp RGB and programs the matching maximum native LB configuration,
+rather than advertising a full buffer while selecting a smaller memory bank.
+
+Application/rollback require all five OTG/VTG pipelines stopped, powered native
+LB groups, HUBP clocks and local DPP clock enable with its test mux off. Each
+write proves PCI resources, exact completed DFS, all six owned floors and the
+installed fetch/WM/reference. Timing additionally re-verifies the entire DPP
+configuration. Restoration order is timing, DPP (old cursors last), fetch,
+watermarks/policy, then clocks. Lost state keeps dependencies quarantined until
+explicit guarded repair. A repeated apply now rejects before work without
+incorrectly marking an otherwise healthy retained parent as failed.
+
+DPP model/sanitizer checks passed 4,091 cases with 867,305 assertions; actual
+retained RX6600 code passed 1,813 cases at direct and two distinct PIC bases,
+including every DPP apply/restore write failure, posted/ignored writes and
+persistent clock/PCI/reference/fetch/LB/pipeline loss at each apply write.
+DML math/sanitizer checks passed 467 cases with 925 assertions. These prove
+configuration code and modeled recovery, not active physical pixels. The
+RX6600 candidate remains unpublished and outside the catalog. Full PLL/PHY,
+activation, HDMI audio, the four other physical backends and a new physical
+driver ISO remain unfinished.
+
 The latest RX6600 candidate adds native DAL SMU mailbox initialization,
 protocol/version checks and actual supported SOCCLK/UCLK/DCEFCLK/DISPCLK/DPPCLK/PHYCLK
 levels. It can send native acknowledged hard-minimum clock requests; these

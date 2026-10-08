@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "cases": 4091,
+  "checks": 867305,
+  "native_dcn3_float_scaler_lb": true,
+  "native_rgb8_color_bypass": true,
+  "native_local_dpp_clock_verified": true,
+  "both_physical_cursor_enables": true,
+  "native_maximum_lb_config": true,
+  "posted_failure_rollback": true,
+  "physical_hardware_tested": false,
+  "undefined_behavior_sanitizer_passed": true,
+  "source_sha256": {
+    "tests/host/test_dcn302_dpp.c": "49dc0e71fcc793f7affb528a795b5f792899ad281e7fc331717aa51f76fd5a0b",
+    "tools/gpu-driver/amd/dcn302_dpp.c": "ece6aeaa09e3dedca9597470941fecd6fab0b7efde46ded31194d6c01f6eab3d",
+    "tools/gpu-driver/amd/dcn302_dpp.h": "ec9880526bee350f19a5ee4c367c433d1805f140a42c230d0eb7ebbb9373eed0",
+    "tools/gpu-driver/amd/dcn302_dpp_regs.h": "17ee9781f0c1df247c0520902ab7ce0272c21682cc7bb1efa5ba3e59fcab6d78",
+    "tools/gpu-driver/amd/dcn302_otg.h": "e7ba1172e746f42d38983de191d462ff975a18eb07eecb886ffaa8e053f80148",
+    "tools/gpu-driver/amd/dcn302_regs.h": "c8be758ca9815c9597fd9453060eab03a2c98f2729af946a00bce47fa7c4fce5",
+    "scripts/generate_dcn302_dpp_regs.py": "d858613a81f714f2e0e73a8e2dbb89af21665205c2d08cd742c6e4bc9233de76",
+    "scripts/test_dcn302_dpp.py": "e9948302631082f08117062f98a109efe875df9099bd01c700ed17cc35cd7f8a"
+  }
+}

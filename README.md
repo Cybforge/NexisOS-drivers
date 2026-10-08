@@ -54,7 +54,20 @@ Old timing must be restored before fetch, policy or clocks can be released;
 lost native state leaves it quarantined until explicit restoration. This runs
 at both distinct PIC addresses with apply/restore write faults, including
 posted/ignored writes. It still does not enable the native pixel/link path.
-Full modeset composition, native scaler/cursor proof, pixel PLL/PHY and coordinated HDMI
+The native DPP transaction now programs real RGB8888 conversion, identity CNV
+crossbar, unity pre-degamma/CSC/CM bypass, disabled alpha/color key, full recout,
+the float-format linebuffer and 1:1 scaler. Both actual cursor enables are
+disabled; HUBP/DPP share one CURSOR_CONTROL register and CNVC has the other.
+The checked 24-register map owns 18 configuration registers and excludes RO
+pending/current/partition status. Powered linebuffer, HUBP clocks and local
+DPP clock enable/test mux are proven. The DML linebuffer was corrected from
+8 to the native internal 16 bits per channel (48 bits per RGB pixel).
+Each write/rollback re-proves retained PCI/clocks/floors/fetch/WM. Timing also
+verifies the installed DPP path and must restore before DPP; DPP restores before
+fetch/WM/clocks, with old cursors last. Posted/ignored writes, lost native state,
+explicit restoration and repeat-apply rejection execute at both PIC addresses.
+These model checks do not prove active physical pixels or a completed modeset.
+Full modeset composition, active scaling/color/cursor proof, pixel PLL/PHY and coordinated HDMI
 audio modesetting remain pending; it is not a complete card driver or catalog package. See
 `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
 The existing Bochs module programs DISPI registers directly for NexisOS. On a matching virtual adapter it takes over the existing framebuffer dimensions, programs 32-bit DISPI scanout and reuses the compositor's RAM back buffer.
@@ -110,6 +123,7 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 - `tools/gpu-driver/amd/dcn302_hubp.c`: actual stopped/blanked Navi23 RQ/DLG/TTU programming, field bounds, native DCN3 drain/blank behavior and verified rollback; no full modeset claim.
 - `tools/gpu-driver/amd/dcn302_hubbub.c`: native reference-clock selection/divider, four checked watermark sets and fixed-floor memory/self-refresh policy with verified reverse rollback; no physical transition-completion claim.
 - `tools/gpu-driver/amd/dcn302_timing.c`: native stopped geometry/global-sync with DCN3 update lock, bounded pending drain, buffering policy and parent-guarded rollback before releasing fetch/WM/clocks; no PLL/PHY/scanout activation claim.
+- `tools/gpu-driver/amd/dcn302_dpp.c`: native RGB8 conversion/color bypass, float-format 1:1 scaler/linebuffer and both physical cursor controls; status-safe stopped/powered guarded writes and reverse restoration before fetch/WM/clocks.
 - `tools/gpu-driver/amd/dml/`: checksum-pinned AMD MIT math source with original notices and reproducible platform-only adaptations.
 - `scripts/import_dcn30_dml.py`: verifies upstream hashes, preserves the algorithm and excludes board/clock placeholders from the ASIC template.
 - `scripts/test_dcn302_dml.py`: complete math and real retained PIC calculations, FP-state/error recovery and sanitizer checks; no claim of physical hardware verification.
