@@ -31,7 +31,7 @@
         "73ff",
         "73ef"
       ],
-      "version": 1,
+      "version": 2,
       "min_version": 1,
       "trial": true,
       "status": "complete native sequence (clocks, fetch, color path, timing, PLL, SCDC, HDMI, audio endpoint) with rollback; verified against a register MODEL only, not on physical hardware",

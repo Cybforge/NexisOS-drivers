@@ -4,11 +4,12 @@
 #include <windows.h>
 #include "../../tools/gpu-driver/include/nexis_gpu_v2.h"
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);exit(1);}}while(0)
-_Static_assert(sizeof(nexis_gpu_services)==112 && offsetof(nexis_gpu_services,resource)==104,"Module ABI layout");
+_Static_assert(sizeof(nexis_gpu_services)==NEXIS_GPU_SERVICES_LOG_BYTES && offsetof(nexis_gpu_services,resource)==NEXIS_GPU_SERVICES_BASE_BYTES &&
+              offsetof(nexis_gpu_services,log)==NEXIS_GPU_SERVICES_RESOURCE_BYTES,"Module ABI layout");
 static unsigned reads,queries,cases;
 static bool NEXIS_GPU_CALL read32(void *ctx,unsigned bar,uint32_t offset,uint32_t *value){CHECK(ctx==(void *)17 && bar==5 && offset==4);reads++;*value=0x73ff;return true;}
 static bool NEXIS_GPU_CALL resource(void *ctx,unsigned bar,nexis_gpu_resource *out){CHECK(ctx==(void *)17 && bar==0);queries++;*out=(nexis_gpu_resource){0x800000000ULL,0x200000000ULL,7,0};return true;}
-static nexis_gpu_services services={.abi=2,.size=sizeof(services),.service_context=(void *)17,.read32=read32,.resource=resource};
+static nexis_gpu_services services={.abi=2,.size=NEXIS_GPU_SERVICES_RESOURCE_BYTES,.service_context=(void *)17,.read32=read32,.resource=resource};
 static uint8_t *image;static size_t bytes;
 static void w32(unsigned off,uint32_t v){for(unsigned i=0;i<4;i++)image[off+i]=(uint8_t)(v>>(8*i));}
 static void run(const nexis_gpu_image *m,const nexis_gpu_services *svc,void **allocation,nexis_gpu_instance *instance){

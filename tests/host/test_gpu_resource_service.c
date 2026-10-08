@@ -32,7 +32,8 @@ uint32_t fb_get_pitch(void){CHECK(false);return 0;}uint32_t fb_get_width(void){C
 bool fb_is_rgb(void){CHECK(false);return false;}
 bool fb_native_activate(uint64_t b,uint32_t p,uint32_t f,const char *s){(void)b;(void)p;(void)f;(void)s;CHECK(false);return false;}
 void sha256_hash(const void *p,size_t n,uint8_t out[32]){(void)p;(void)n;(void)out;CHECK(false);}
-int kprintf(const char *fmt,...){(void)fmt;CHECK(false);return 0;}
+static unsigned log_lines;
+int kprintf(const char *fmt,...){(void)fmt;log_lines++;return 0;} /* resource() reports the first rejection per load */
 static void init(void){
     memset(&R,0,sizeof(R));memset(&boot,0,sizeof(boot));memset(config,0,sizeof(config));reads=mutate_at=0;boot_present=true;
     R.device=(pci_device_t){.bus=1,.vendor_id=0x1002,.device_id=0x73ff,.class_id=3};
@@ -65,6 +66,9 @@ int main(void){
     for(unsigned n=1;n<=ops;n++){init();mutate_at=n;rejected(0);}
     for(unsigned n=1;n<5;n++){init();rejected(n);}
     init();rejected(6);CHECK(!call(0,NULL));cases++;
+    /* A rejection is explained once in the kernel log, not once per register transaction. */
+    init();log_lines=0;config[1]=0;rejected(0);rejected(0);rejected(5);CHECK(log_lines==1);cases++;
+    init();log_lines=0;CHECK(call(0,&out) && call(5,&out) && !log_lines);cases++;
     uint64_t address;
     init();CHECK(register_address(&R,5,0xffffc,&address) && address==0xb00ffffc);cases++;
     CHECK(!register_address(&R,5,0x100000,&address) && !register_address(&R,5,2,&address) &&

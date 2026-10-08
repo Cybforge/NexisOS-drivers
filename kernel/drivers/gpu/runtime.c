@@ -11,7 +11,7 @@
 #include "../../../tools/gpu-driver/include/nexis_gpu_v2.h"
 #define BASE GPU_MODULE_VIRTUAL_BASE
 static struct {
-    bool resident,active,calling,have_initial,audio;
+    bool resident,active,calling,have_initial,audio,reject_logged;
     uint64_t physical,last_poll_us,bar[6],bar_bytes[6];size_t pages,mapped;
     nexis_gpu_image image;
     nexis_gpu_services services;
@@ -64,24 +64,30 @@ static bool device_ready(const pci_device_t *d){
         (pci_read_dword(d->bus,d->slot,d->func,8)>>24)==3 && (pci_read_word(d->bus,d->slot,d->func,4)&2) &&
         !(pci_read_word(d->bus,d->slot,d->func,0x0e)&0x7f);
 }
+/* A rejected resource query is logged once per module load (the module asks again for every register transaction). */
+static bool resource_reject(const char *why,unsigned bar){
+    if(!R.reject_logged){R.reject_logged=true;kprintf("[GPU] PCI resource query for BAR%u rejected: %s\n",bar,why);}
+    return false;
+}
 static bool NEXIS_GPU_CALL resource(void *context,unsigned bar,nexis_gpu_resource *out){
     if(!out)return false;
     memset(out,0,sizeof(*out));
     if(context!=&R || bar>=6)return false;
     const nexis_boot_info_t *boot=bootinfo_get();const pci_device_t *d=&R.device;
-    if(!boot || !device_ready(d))return false;
+    if(!boot)return resource_reject("no boot info",bar);
+    if(!device_ready(d))return resource_reject("adapter not ready (vendor/class/memory-enable/header type)",bar);
     uint32_t raw[6],again[6];uint64_t base[6],bytes[6];read_bars(d,raw);firmware_ranges(boot,base,bytes);
     nexis_gpu_resource live;
-    if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live) ||
-       live.base!=R.resources[bar].base || live.bytes!=R.resources[bar].bytes ||
-       live.flags!=(R.resources[bar].flags&~NEXIS_GPU_RESOURCE_REGISTERS))return false;
+    if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live))return resource_reject("BAR does not match the UEFI-reported extent",bar);
+    if(live.base!=R.resources[bar].base || live.bytes!=R.resources[bar].bytes ||
+       live.flags!=(R.resources[bar].flags&~NEXIS_GPU_RESOURCE_REGISTERS))return resource_reject("BAR changed since the module was loaded",bar);
     read_bars(d,again);
-    if(memcmp(raw,again,sizeof(raw)) || !device_ready(d))return false;
+    if(memcmp(raw,again,sizeof(raw)) || !device_ready(d))return resource_reject("BARs changed during the query",bar);
     /* Confirm this aperture last, after the full sweeps. PCI display changes
      * are serialized by the caller; this also detects a late BAR mutation
      * after its slot was read early in a sweep. Never write/probe a BAR. */
-    if((live.flags&NEXIS_GPU_RESOURCE_64BIT) && pci_read_dword(d->bus,d->slot,d->func,0x14+bar*4)!=raw[bar+1])return false;
-    if(pci_read_dword(d->bus,d->slot,d->func,0x10+bar*4)!=raw[bar])return false;
+    if((live.flags&NEXIS_GPU_RESOURCE_64BIT) && pci_read_dword(d->bus,d->slot,d->func,0x14+bar*4)!=raw[bar+1])return resource_reject("upper BAR half changed",bar);
+    if(pci_read_dword(d->bus,d->slot,d->func,0x10+bar*4)!=raw[bar])return resource_reject("BAR changed",bar);
     *out=R.resources[bar];return true;
 }
 static void release(bool stop){
@@ -157,12 +163,21 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
      * banks are mapped for register access; no large aperture is mapped here. */
     uint32_t raw[6];uint64_t base_ranges[6],byte_ranges[6];read_bars(device,raw);firmware_ranges(boot,base_ranges,byte_ranges);
     for(unsigned n=0;n<6;n++){
-        if(!gpu_pci_resource_decode(raw,base_ranges,byte_ranges,n,&R.resources[n]))continue;
+        /* One line per BAR: this is the first thing to read if a driver reports a resource problem. */
+        if(!gpu_pci_resource_decode(raw,base_ranges,byte_ranges,n,&R.resources[n])){
+            if(raw[n] || byte_ranges[n])
+                kprintf("[GPU] BAR%u not usable: config %08x, firmware extent %llx + %llx\n",n,raw[n],(unsigned long long)base_ranges[n],(unsigned long long)byte_ranges[n]);
+            continue;
+        }
         uint64_t base=R.resources[n].base,size=R.resources[n].bytes;
+        bool mapped=false;
         if(base<(64ULL<<30) && size<=(64ULL<<30)-base && size<=16*1024*1024 && vmm_map_mmio(base,(size_t)size)){
             R.bar[n]=base;R.bar_bytes[n]=size;
             R.resources[n].flags|=NEXIS_GPU_RESOURCE_REGISTERS;
+            mapped=true;
         }
+        kprintf("[GPU] BAR%u: %llx + %llx flags %x%s\n",n,(unsigned long long)base,(unsigned long long)size,R.resources[n].flags,
+                mapped?" (registers mapped)":(size>16*1024*1024?" (aperture, not mapped)":" (MAPPING FAILED)"));
     }
     R.services=(nexis_gpu_services){2,image.services_bytes,fb_get_width(),fb_get_height(),fb_get_pitch(),fb_is_rgb()?0:1,
         device->vendor_id,device->device_id,device->bus,device->slot,device->func,0,fb_front_base(),fb_front_size(),

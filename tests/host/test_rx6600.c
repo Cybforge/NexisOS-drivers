@@ -250,6 +250,9 @@ static void normal(void){
 }
 static void failures(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out,zero={0};
+    /* A 512 KiB register BAR is enough: the highest register the driver uses (DFS PLL 0x5c040) is below it. */
+    init(&m,&k,4,0,3,2,1,2,4,1,1);m.registers.bytes=0x80000;
+    CHECK(rx6600_probe(&s,&k)==RX6600_OK && s.ready && !s.busy);rx6600_shutdown(&s);cases++;
     for(unsigned fault=0;fault<32;fault++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);
         switch(fault){

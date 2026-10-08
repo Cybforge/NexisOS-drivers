@@ -244,7 +244,10 @@ static void countdown_tick(void) {
         uint32_t version = P.hold_version;
         P.hold = NULL; /* ownership moves to this frame; pending drops first so no key or poll can touch the copy */
         P.pending = false;
-        if (!start_module(module, bytes, version)) kprintf("[GPU] Package '%s' could not be activated\n", P.entry->name);
+        if (!start_module(module, bytes, version)) {
+            kprintf("[GPU] Package '%s' could not be activated\n", P.entry->name);
+            notify_post("Grafiktreiber", "Konnte nicht gestartet werden", "Firmware-Anzeige bleibt. Details: Terminal, dmesg", NOTIFY_ERROR);
+        }
         kfree(module);
         return;
     }

@@ -114,6 +114,16 @@ Rückgängig-machen in `tools/gpu-driver/common/modeset_seq.c`:
 
 Alle Registertests belegen die Logik gegen ein Modell, **nicht** das Verhalten echter Chips.
 
+## Erster Hardwarelauf (2026-10-08)
+
+Auf einer echten RX 6600 (`1002:73ff`): Download, Signaturprüfung und Countdown liefen; der Treiber (Paket v1) brach
+danach in der Start-Prüfung ab: „Retained module initialization rejected (2)“, Code 2 = `RX6600_RESOURCE` – die
+Prüfung der PCI-Aperturen (VRAM-BAR0 / Register-BAR5). Das Bild blieb auf dem Firmware-Modus, der Rechner lief weiter.
+Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an echter Hardware geprüft war; der Treiber
+braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
+ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
+at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
 ## Erster Test auf der echten Karte
 
 1. Ethernet anschließen, NexisOS starten (Live oder installiert). Nach dem Desktop erscheint der 10-s-Countdown.

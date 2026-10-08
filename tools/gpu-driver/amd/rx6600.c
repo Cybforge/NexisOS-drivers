@@ -368,34 +368,51 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
     volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;operations->sink_read=sink_read_ddc;operations->sink_write=sink_write_ddc;
-    if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
-       s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
+    bool have_vram=k->resource(k->service_context,0,&s->vram),have_registers=k->resource(k->service_context,5,&s->registers);
+    if(!have_vram || !have_registers){
+        nx_logf("rx6600: PCI resource query rejected: BAR0 (VRAM) %s, BAR5 (registers) %s - see the [GPU] BAR lines above",have_vram?"ok":"REJECTED",have_registers?"ok":"REJECTED");
+        return fail(s,RX6600_RESOURCE);
+    }
+    /* BAR5 must hold every register the driver touches; the highest one (SMU mailbox) is below 0x60000, and the kernel
+     * bounds-checks each access, so any aperture of at least 512 KiB is accepted. */
+    if(s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||
-       (s->registers.flags&~15u) || s->registers.bytes<1024*1024)return fail(s,RX6600_RESOURCE);
+       (s->registers.flags&~15u) || s->registers.bytes<512*1024){
+        nx_logf("rx6600: unexpected BAR layout: BAR0 %llx+%llx flags %x, BAR5 %llx+%llx flags %x",(unsigned long long)s->vram.base,(unsigned long long)s->vram.bytes,
+            s->vram.flags,(unsigned long long)s->registers.base,(unsigned long long)s->registers.bytes,s->registers.flags);
+        return fail(s,RX6600_RESOURCE);
+    }
+    /* Every failure below names its step: the first hardware run showed that "rejected (n)" alone is not enough to
+     * find the cause on a card that cannot be reached from the development machine. */
     atom_rom rom;
-    if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom))return fail(s,RX6600_ROM);
+    if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom)){nx_logf("rx6600: probe stopped at: video BIOS image (%u bytes) not usable",(unsigned)k->rom_bytes);return fail(s,RX6600_ROM);}
     s->firmware_rom=rom;
-    if(atom_board_open(&rom,&s->board)!=ATOM_BOARD_OK)return fail(s,RX6600_BOARD);
-    if(atom_memory_open(&rom,&s->memory)!=ATOM_MEMORY_OK)return fail(s,RX6600_MEMORY);
-    if(dcn302_reference_read(&s->io,s->board.reference_khz,&s->reference))return fail(s,RX6600_CLOCK);
-    if(dcn302_route_find(&s->io,&s->board,k->width,k->height,&s->route)!=DCN302_ROUTE_OK)return fail(s,RX6600_ROUTE);
-    if(dcn302_surface_bind(&s->io,&s->route,s->vram.base,s->vram.bytes,k->framebuffer,k->framebuffer_bytes,k->pitch,k->format,&s->surface)!=DCN302_SURFACE_OK)return fail(s,RX6600_SURFACE);
+    unsigned detail=atom_board_open(&rom,&s->board);
+    if(detail!=ATOM_BOARD_OK){nx_logf("rx6600: probe stopped at: board data of the video BIOS (code %u)",detail);return fail(s,RX6600_BOARD);}
+    detail=atom_memory_open(&rom,&s->memory);
+    if(detail!=ATOM_MEMORY_OK){nx_logf("rx6600: probe stopped at: VRAM description of the video BIOS (code %u)",detail);return fail(s,RX6600_MEMORY);}
+    if(dcn302_reference_read(&s->io,s->board.reference_khz,&s->reference)){nx_logf("rx6600: probe stopped at: reference clock readback (BIOS says %u kHz)",s->board.reference_khz);return fail(s,RX6600_CLOCK);}
+    detail=dcn302_route_find(&s->io,&s->board,k->width,k->height,&s->route);
+    if(detail!=DCN302_ROUTE_OK){nx_logf("rx6600: probe stopped at: finding the HDMI output that UEFI lights (code %u, desktop %ux%u)",detail,k->width,k->height);return fail(s,RX6600_ROUTE);}
+    detail=dcn302_surface_bind(&s->io,&s->route,s->vram.base,s->vram.bytes,k->framebuffer,k->framebuffer_bytes,k->pitch,k->format,&s->surface);
+    if(detail!=DCN302_SURFACE_OK){nx_logf("rx6600: probe stopped at: scan-out surface does not match the desktop framebuffer (code %u)",detail);return fail(s,RX6600_SURFACE);}
     dcn302_snapshot fixed;
-    if(!dcn302_otg_snapshot(&s->io,s->route.otg,&fixed))return fail(s,RX6600_CLOCK);
+    if(!dcn302_otg_snapshot(&s->io,s->route.otg,&fixed)){nx_logf("rx6600: probe stopped at: OTG %u timing snapshot",s->route.otg);return fail(s,RX6600_CLOCK);}
     s->fixed_rate[0]=fixed.registers[DCN302_R_V_CONTROL];s->fixed_rate[1]=fixed.registers[DCN302_R_V_MIN];s->fixed_rate[2]=fixed.registers[DCN302_R_V_MAX];
-    if(dcn302_clock_measure(&s->io,s->route.otg,now,16,&s->clock)!=DCN302_OK ||
-       s->clock.pixel_khz>s->route.max_tmds_khz)return fail(s,RX6600_CLOCK);
-    if(dcn302_dfs_read(&s->io,&s->dfs))return fail(s,RX6600_CLOCK);
-    if(!dcn302_smu_open(&s->smu,&s->io,now))return fail(s,RX6600_SMU);
+    detail=dcn302_clock_measure(&s->io,s->route.otg,now,16,&s->clock);
+    if(detail!=DCN302_OK || s->clock.pixel_khz>s->route.max_tmds_khz){nx_logf("rx6600: probe stopped at: measuring the running pixel clock (code %u, %u kHz, limit %u kHz)",detail,s->clock.pixel_khz,s->route.max_tmds_khz);return fail(s,RX6600_CLOCK);}
+    if(dcn302_dfs_read(&s->io,&s->dfs)){nx_logf("rx6600: probe stopped at: display clock (DFS) readback");return fail(s,RX6600_CLOCK);}
+    if(!dcn302_smu_open(&s->smu,&s->io,now)){nx_logf("rx6600: probe stopped at: power-management (SMU) mailbox did not answer");return fail(s,RX6600_SMU);}
     const enum dcn302_smu_clock clocks[]={DCN302_SMU_SOCCLK,DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_DISPCLK,DCN302_SMU_DPPCLK,DCN302_SMU_PHYCLK};
     for(unsigned n=0;n<6;n++){
         dcn302_smu_limits limits;
-        if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits))return fail(s,RX6600_SMU);
+        if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits)){nx_logf("rx6600: probe stopped at: SMU clock limits for clock %u",n);return fail(s,RX6600_SMU);}
     }
-    enum rx6600_error error=prove(s);if(error)return fail(s,error);
+    enum rx6600_error error=prove(s);
+    if(error){nx_logf("rx6600: probe stopped at: final consistency check (code %u)",(unsigned)error);return fail(s,error);}
     s->sampled_us=now(s);
-    if(!dcn302_otg_frame_count(&s->io,s->route.otg,&s->sampled_frame))return fail(s,RX6600_CLOCK);
-    if(!dcn302_ddc_init(&s->ddc,&s->io,s->route.ddc,s->board.reference_khz))return fail(s,RX6600_ROUTE);
+    if(!dcn302_otg_frame_count(&s->io,s->route.otg,&s->sampled_frame)){nx_logf("rx6600: probe stopped at: OTG frame counter");return fail(s,RX6600_CLOCK);}
+    if(!dcn302_ddc_init(&s->ddc,&s->io,s->route.ddc,s->board.reference_khz)){nx_logf("rx6600: probe stopped at: DDC (monitor I2C) setup");return fail(s,RX6600_ROUTE);}
     nx_logf("rx6600: probe ok, %ux%u at %u kHz (%u.%03u Hz), HDMI path %u, OTG %u, link %u, stream %u, DDC %u, max TMDS %u kHz",
         s->route.shape.hactive,s->route.shape.vactive,s->clock.pixel_khz,s->clock.refresh_millihz/1000,s->clock.refresh_millihz%1000,
         s->route.path,s->route.otg,s->route.link,s->route.stream,s->route.ddc,s->route.max_tmds_khz);

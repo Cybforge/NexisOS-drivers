@@ -5,7 +5,7 @@ import hashlib,json,os,shutil,subprocess
 from build_gpu_module_v2 import build
 root=Path(__file__).resolve().parents[1];out=root/'build/gpu-runtime-tests';out.mkdir(exist_ok=True)
 gcc=os.environ.get('NEXIS_HOST_CC') or shutil.which('gcc') or r'C:\Tools\w64devkit\bin\gcc.exe'
-fixture=out/'fixture.ndrv';metadata=build([root/'tests/host/gpu_v2_fixture.c'],fixture,0x1002,0x73ff)
+fixture=out/'fixture.ndrv';metadata=build([root/'tests/host/gpu_v2_fixture.c'],fixture,0x1002,0x73ff,112)  # the fixture exercises the 104/112-byte legacy service prefixes; shipped modules use 136
 exe=out/'image.exe'
 subprocess.run([gcc,'-std=c11','-O2','-Wall','-Wextra','-Werror',str(root/'tests/host/test_gpu_image.c'),str(root/'kernel/drivers/gpu/module_image.c'),'-o',str(exe)],check=True)
 result=subprocess.run([str(exe),str(fixture)],capture_output=True,text=True)
