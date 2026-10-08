@@ -40,4 +40,6 @@ enum dcn302_hubbub_error dcn302_hubbub_prepare(const dcn302_io *,unsigned hubp,
  * of the full modeset, not a completed physical card driver. */
 enum dcn302_hubbub_error dcn302_hubbub_apply_disabled(const dcn302_io *,dcn302_hubbub_transaction *);
 enum dcn302_hubbub_error dcn302_hubbub_restore_disabled(const dcn302_io *,dcn302_hubbub_transaction *);
+/* Read-only installed policy/watermark/reference guard for parent timing. */
+enum dcn302_hubbub_error dcn302_hubbub_verify_installed(const dcn302_io *,const dcn302_hubbub_transaction *);
 #endif

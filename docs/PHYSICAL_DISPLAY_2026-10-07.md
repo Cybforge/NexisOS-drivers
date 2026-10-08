@@ -98,16 +98,30 @@ while the fixed-floor plan is installed. Floor changes also revalidate PCI
 resources before any mailbox write. These are native configuration operations;
 they do not prove that a physical firmware memory transition has completed.
 
-Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 778 cases,
+Native stopped timing/global-sync is now retained with the same successful DML
+result as HUBP/HUBBUB: VSTARTUP, VUPDATE, VREADY, full progressive geometry,
+polarity, VTG initialization and fixed-rate controls. The new transaction uses
+DCN3's actual GLOBAL_CONTROL2 lock selector, bounded lock acknowledgment and
+pending drain, and disables timing double buffering while programming. It
+preserves unrelated configuration and never replays status/instant-trigger bits.
+Before and after every write it revalidates PCI extents, exact native DFS clocks,
+all six owned SMU floors, installed HUBP fetch state and HUBBUB policy/reference,
+and stopped/powered OTGs/VTGs. Restore puts the old timing back before releasing
+fetch/watermarks/policy or clocks. Posted/ignored writes and lost pipeline,
+clock, reference, resource or fetch state are checked in the actual retained
+PIC code; poisoned rollback retains dependencies until explicit restoration.
+Successful restoration does not silently restore parent readiness.
+
+Current checks: SMU 197 cases, DFS/DTO 1,410 cases, retained RX6600 1,105 cases,
 ATOM memory 2,074 cases, complete DML/PIC math 467 cases, HUBP 6,701 cases and
-HUBBUB 7,972 cases;
+HUBBUB 7,972 cases, plus native timing/global-sync 4,854 cases;
 all pass with warnings treated as errors and the undefined-behavior sanitizer.
-The RX6600 candidate is 200,768 bytes with 425,984-byte retained memory, no imports
+The RX6600 candidate is 217,152 bytes with 442,368-byte retained memory, no imports
 or runtime relocations. The MMIO/firmware responses are modeled, not physical
 hardware evidence. The 1080p 240-Hz timing passes the math test, which does not
 mean NexisOS has physically switched the card to that mode. The pure math
-harness is never installed as a driver. Retained OTG global-sync
-integration, scaler/cursor proof, pixel PLL/PHY, complete link rollback
+harness is never installed as a driver. Full modeset composition,
+scaler/cursor proof, pixel PLL/PHY, complete link rollback
 and AZALIA/HDA audio coordination remain required, along with full native
 memory/clock-policy transition proof and the other four card
 backends. The candidate stays outside the catalog and is not embedded in the

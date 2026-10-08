@@ -127,6 +127,12 @@ static enum dcn302_hubbub_error verify(const dcn302_io *io,const uint32_t *targe
     uint32_t current[DCN302_HUBBUB_REGISTER_COUNT];enum dcn302_hubbub_error e=snapshot(io,current);
     return e?e:memcmp(current,target,sizeof(current))?DCN302_HUBBUB_READBACK:DCN302_HUBBUB_OK;
 }
+enum dcn302_hubbub_error dcn302_hubbub_verify_installed(const dcn302_io *io,const dcn302_hubbub_transaction *t){
+    if(!usable(io,t))return DCN302_HUBBUB_INPUT;
+    if(!t->applied || t->poisoned)return DCN302_HUBBUB_BUSY;
+    enum dcn302_hubbub_error e=quiet(io,t);if(e)return e;
+    e=verify(io,t->after);return e?e:quiet(io,t);
+}
 static enum dcn302_hubbub_error program_one(const dcn302_io *io,dcn302_hubbub_transaction *t,unsigned reg,const uint32_t *target){
     enum dcn302_hubbub_error e=quiet(io,t);if(e)return e;
     uint32_t current,mask=dcn302_hubbub_owned[reg],addr=dcn302_hubbub_register_bytes[reg];

@@ -35,4 +35,7 @@ enum dcn302_hubp_error dcn302_hubp_blank(const dcn302_io *,unsigned,uint64_t (*t
  * Poisoned/dirty means parent must keep the pipeline off. */
 enum dcn302_hubp_error dcn302_hubp_apply_disabled(const dcn302_io *,dcn302_hubp_transaction *);
 enum dcn302_hubp_error dcn302_hubp_restore_disabled(const dcn302_io *,dcn302_hubp_transaction *);
+/* Read-only parent guard: installed native fetch state and stopped/blanked
+ * pipeline must still match. Never changes the transaction or registers. */
+enum dcn302_hubp_error dcn302_hubp_verify_installed(const dcn302_io *,const dcn302_hubp_transaction *);
 #endif

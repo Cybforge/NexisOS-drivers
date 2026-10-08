@@ -6,8 +6,8 @@
   "undefined_behavior_sanitizer_passed": true,
   "source_sha256": {
     "tests/host/test_dcn302_hubp.c": "ecf951d2dc6a7d816aaf654cc8bc751e78aa6df8aca611ebcaef2ae2304c8d96",
-    "tools/gpu-driver/amd/dcn302_hubp.c": "bed10bc0fb0bc12512ffe013dc23f842e2e525563e05185940da21c5442e7efb",
-    "tools/gpu-driver/amd/dcn302_hubp.h": "f0b47e5b5c5897b70533f1a66f8efa14b15f1f55623e081a1b4783af9b8dbb65",
+    "tools/gpu-driver/amd/dcn302_hubp.c": "31bdc5a3f3f13358577a17c75d95bcf7d3948ebc6e29b9cf39d8b6d70bdb9e49",
+    "tools/gpu-driver/amd/dcn302_hubp.h": "1920271905b4dff1b9dea00db891390c56cf1dd22f634e5c85ea8f5a025f74cf",
     "tools/gpu-driver/amd/dcn302_hubp_regs.h": "31e1432525d555c48f9428311a40d76a124357b3fea5530caed6b2cca905b4c3",
     "tools/gpu-driver/amd/dcn302_dml.h": "9270348a1f2c34d231f9f00679bee7202493865d9cf3a0b2aac758d5448ead56",
     "tools/gpu-driver/amd/dcn302_otg.h": "e7ba1172e746f42d38983de191d462ff975a18eb07eecb886ffaa8e053f80148",

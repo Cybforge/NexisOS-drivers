@@ -18,7 +18,8 @@ static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock
     /* PSTATE_ALLOW is forced low by this fixed-floor model. Even an upward
      * UCLK request can require a transition; defer every such command until
      * the old policy is restored, not just requests below the floor. */
-    if(clock==DCN302_SMU_UCLK && (s->hubbub_transaction.dirty || s->hubbub_transaction.applied || s->hubbub_transaction.poisoned))return false;
+    if(clock==DCN302_SMU_UCLK && (s->hubbub_transaction.dirty || s->hubbub_transaction.applied || s->hubbub_transaction.poisoned ||
+       s->timing_transaction.dirty || s->timing_transaction.applied || s->timing_transaction.poisoned))return false;
     if(s->hubp_transaction.dirty || s->hubp_transaction.applied || s->hubbub_transaction.dirty || s->hubbub_transaction.applied){
         const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
         for(unsigned n=0;n<4;n++)if((unsigned)clock==clocks[n] && mhz<s->hubp_floor_mhz[n])return false;
@@ -45,7 +46,8 @@ static bool NEXIS_GPU_CALL display_clocks(void *context,const dcn302_dfs_request
        (op==RX6600_DFS_PREPARE?!r:r!=NULL))return false;
     /* RQ/DLG and watermarks are bound to these exact clocks. Restore them
      * before changing clocks, including a DFS rollback. */
-    if(op!=RX6600_DFS_PREPARE && (s->hubp_transaction.dirty || s->hubp_transaction.applied ||
+    if(op!=RX6600_DFS_PREPARE && (s->timing_transaction.dirty || s->timing_transaction.applied || s->timing_transaction.poisoned ||
+       s->hubp_transaction.dirty || s->hubp_transaction.applied ||
        s->hubbub_transaction.dirty || s->hubbub_transaction.applied))return false;
     s->busy=true;enum dcn302_dfs_error error=DCN302_DFS_OK;
     if(!resources(s)){fail(s,RX6600_RESOURCE);s->busy=false;return false;}
@@ -117,6 +119,29 @@ static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *
 done:
     s->busy=false;return ok;
 }
+static bool timing_guard(void *context){
+    rx6600_state *s=context;dcn302_dfs_snapshot current;
+    if(!s || !s->services || !resources(s) || !s->smu.ready || s->smu.busy || s->smu.poisoned ||
+       dcn302_dfs_read(&s->io,&current) || memcmp(&current,&s->hubp_clock_target,sizeof(current)))return false;
+    const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
+    for(unsigned n=0;n<4;n++)if(!s->hubp_floor_mhz[n] || !s->smu.floor_known[clocks[n]] || s->smu.floor_mhz[clocks[n]]<s->hubp_floor_mhz[n])return false;
+    if(!s->smu.floor_known[DCN302_SMU_DISPCLK] || !s->smu.floor_known[DCN302_SMU_DPPCLK] ||
+       s->smu.floor_mhz[DCN302_SMU_DISPCLK]<s->hubp_clock_target.disp_floor_mhz ||
+       s->smu.floor_mhz[DCN302_SMU_DPPCLK]<s->hubp_clock_target.dpp_floor_mhz)return false;
+    return !dcn302_hubp_verify_installed(&s->io,&s->hubp_transaction) &&
+        !dcn302_hubbub_verify_installed(&s->io,&s->hubbub_transaction);
+}
+static bool NEXIS_GPU_CALL timing_registers(void *context,enum rx6600_timing_operation op){
+    rx6600_state *s=context;
+    if(!s || !s->services || s->busy || (unsigned)op>RX6600_TIMING_RESTORE ||
+       (!s->ready && op!=RX6600_TIMING_RESTORE) || !s->timing_transaction.prepared)return false;
+    s->busy=true;
+    enum dcn302_error e=op==RX6600_TIMING_APPLY?dcn302_timing_apply_disabled(&s->io,&s->timing_transaction):
+        dcn302_timing_restore_disabled(&s->io,&s->timing_transaction);
+    if(s->timing_transaction.poisoned || (e && s->timing_transaction.dirty))fail(s,RX6600_CLOCK);
+    else s->error=e?RX6600_CLOCK:RX6600_OK;
+    s->busy=false;return !e;
+}
 static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_timing *timing,bool prepared,enum rx6600_hubp_operation op){
     rx6600_state *s=context;
     if(!s || !s->services || s->busy || (unsigned)op>RX6600_HUBP_CANCEL ||
@@ -124,21 +149,27 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
        (op==RX6600_HUBP_PREPARE?!timing:(timing!=NULL || prepared)))return false;
     dcn302_hubp_transaction *t=&s->hubp_transaction;
     dcn302_hubbub_transaction *w=&s->hubbub_transaction;
+    dcn302_timing_transaction *q=&s->timing_transaction;
+    /* Native old timing must be back before fetch or forced policy is released. */
+    if(q->dirty || q->applied || q->poisoned)return false;
     if(op==RX6600_HUBP_CANCEL){
         if(t->dirty || t->applied || t->poisoned || w->dirty || w->applied || w->poisoned)return false;
-        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));
+        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));memset(q,0,sizeof(*q));memset(&s->hubp_clock_target,0,sizeof(s->hubp_clock_target));
         memset(s->hubp_floor_mhz,0,sizeof(s->hubp_floor_mhz));return true;
     }
     if(op==RX6600_HUBP_PREPARE){
         if(t->dirty || t->applied || t->poisoned || w->dirty || w->applied || w->poisoned)return false;
         /* Failed recalculation invalidates the prior prepared plan. */
-        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));
+        memset(t,0,sizeof(*t));memset(w,0,sizeof(*w));memset(q,0,sizeof(*q));
         dcn302_dml_output output;
         if(!bandwidth_plan(s,timing,prepared,&output))return false;
         s->busy=true;
         enum dcn302_hubp_error e=dcn302_hubp_prepare(&s->io,s->surface.hubp,timing,&output,t);
         if(!e && dcn302_hubbub_prepare(&s->io,s->surface.hubp,&s->reference,&output,w))e=DCN302_HUBP_READBACK;
-        if(e){t->prepared=false;w->prepared=false;}
+        dcn302_sync sync={.vstartup=output.vstartup,.vready=output.vready_offset,
+            .vupdate_offset=output.vupdate_offset,.vupdate_width=output.vupdate_width,.display_port=false};
+        if(!e && dcn302_timing_prepare(&s->io,s->route.otg,timing,&sync,timing_guard,now,q))e=DCN302_HUBP_READBACK;
+        if(e){t->prepared=false;w->prepared=false;q->prepared=false;}
         if(!e){
             s->hubp_clock_target=prepared?s->dfs_transaction.after:s->dfs;
             const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
@@ -187,7 +218,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;
     if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
        s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||

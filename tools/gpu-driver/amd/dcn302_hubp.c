@@ -140,6 +140,12 @@ static enum dcn302_hubp_error verify(const dcn302_io *io,const dcn302_hubp_trans
     if(e)return e;
     return memcmp(current,target,sizeof(current))?DCN302_HUBP_READBACK:DCN302_HUBP_OK;
 }
+enum dcn302_hubp_error dcn302_hubp_verify_installed(const dcn302_io *io,const dcn302_hubp_transaction *t){
+    if(!usable(io,t))return DCN302_HUBP_INPUT;
+    if(!t->applied || t->poisoned)return DCN302_HUBP_BUSY;
+    enum dcn302_hubp_error e=quiet(io,t->hubp);if(e)return e;
+    e=verify(io,t,t->after);return e?e:quiet(io,t->hubp);
+}
 static enum dcn302_hubp_error program_one(const dcn302_io *io,dcn302_hubp_transaction *t,unsigned reg,const uint32_t *target){
     enum dcn302_hubp_error e=quiet(io,t->hubp);if(e)return e;
     uint32_t current,mask=dcn302_hubp_owned[reg],addr=dcn302_hubp_register_bytes[t->hubp][reg];

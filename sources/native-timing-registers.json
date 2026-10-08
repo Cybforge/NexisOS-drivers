@@ -1,0 +1,15 @@
+{
+  "source": "AMD Linux v6.12",
+  "upstream_sha256": {
+    "dcn302_offset.h": "052c86b51b20d93b99c95b2556fd68b4ecd5ae2388c59a8b2b08a4a00e2ea780",
+    "dcn302_mask.h": "8491525dd88e7ee6fec5f926ee93ee1a2d16953428637325bfd2aaa98c77822b",
+    "dimgrey_cavefish_ip_offset.h": "cd6b042e6ec1e8f71549828fa225182b0bb00c7be6b556ad0d3591d200afedf2",
+    "dcn10_optc.c": "ebd9f31f41e3cfc5bee363b0ebcf21774be5dfb79136366e94f1dbfecd0e10a8",
+    "dcn30_optc.c": "7e751acb0765953ecfbafc7f1123b4d67d67d4af2190c45a7d96f700563b47fc"
+  },
+  "registers": 28,
+  "owned_registers": 22,
+  "native_dcn3_global2_lock_verified": true,
+  "native_drr_mode_field_verified": true,
+  "generated_sha256": "0890ee34379b34e340ee2f5be5a0445a829341f55640ead15abea9ebf910e599"
+}
