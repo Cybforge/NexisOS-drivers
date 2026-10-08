@@ -40,10 +40,19 @@ static unsigned le16(const uint8_t *p){return p[0]|(unsigned)p[1]<<8;}
 static uint32_t le32(const uint8_t *p){return le16(p)|(uint32_t)le16(p+2)<<16;}
 static bool fail(atom_vm *v,enum atom_vm_error e){if(v->error==ATOM_VM_OK)v->error=e;return false;}
 static bool span(size_t n,size_t at,size_t bytes){return at<=n && bytes<=n-at;}
+static bool time_budget(atom_vm *v){
+    uint64_t now=v->io.time_us(v->io.context);
+    /* A calibrated clock moving backwards must not extend a hardware
+     * transaction. Also check IO boundaries: a read may consume the entire
+     * budget before the following write in that same instruction. */
+    if(now<v->last_time_us)return fail(v,ATOM_VM_IO);
+    v->last_time_us=now;
+    if(now>=v->deadline_us)return fail(v,ATOM_VM_LIMIT);
+    return true;
+}
 static bool tick(atom_vm *v){
     if(++v->steps>v->step_limit)return fail(v,ATOM_VM_LIMIT);
-    if(v->io.time_us(v->io.context)>=v->deadline_us)return fail(v,ATOM_VM_LIMIT);
-    return true;
+    return time_budget(v);
 }
 static bool take(atom_vm *v,atom_vm_frame *f,unsigned *pc,unsigned n,uint32_t *out){
     if(!span(f->table.size,*pc,n))return fail(v,ATOM_VM_BYTECODE);
@@ -160,12 +169,14 @@ static bool preflight(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,un
     return true;
 }
 static bool hardware_read(atom_vm *v,enum atom_vm_space space,unsigned reg,uint32_t *out){
+    if(!time_budget(v))return false;
     if(!v->io.read(v->io.context,space,reg,out))return fail(v,ATOM_VM_IO);
-    return true;
+    return time_budget(v);
 }
 static bool hardware_write(atom_vm *v,enum atom_vm_space space,unsigned reg,uint32_t value){
+    if(!time_budget(v))return false;
     if(!v->io.write(v->io.context,space,reg,value))return fail(v,ATOM_VM_IO);
-    return true;
+    return time_budget(v);
 }
 static bool indirect(atom_vm *v,unsigned method,unsigned index,uint32_t data,uint32_t *result){
     if(method>255 || !v->indirect_begin[method])return fail(v,ATOM_VM_UNSUPPORTED);
@@ -304,7 +315,11 @@ static bool run(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,unsigned
             case 80:case 81:{
                 uint32_t us=i.extra*(i.opcode==80?1000:1);
                 if(us>v->delay_remaining_us)return fail(v,ATOM_VM_LIMIT);
-                v->delay_remaining_us-=us;if(!v->io.delay_us(v->io.context,us))return fail(v,ATOM_VM_IO);break;
+                v->delay_remaining_us-=us;
+                if(!time_budget(v))return false;
+                if(!v->io.delay_us(v->io.context,us))return fail(v,ATOM_VM_IO);
+                if(!time_budget(v))return false;
+                break;
             }
             case 82:{
                 unsigned off=v->rom.commands+4+i.extra*2;
@@ -357,7 +372,8 @@ bool atom_vm_execute(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
     if(!v->ready || !ps || !words || words>ATOM_VM_PARAMETERS || command>255){v->error=ATOM_VM_INPUT;return false;}
     v->busy=true;v->error=ATOM_VM_OK;v->steps=0;v->data_block=v->reg_block=v->fb_base=v->io_attr=v->bit_shift=v->io_mode=0;
     v->divmul[0]=v->divmul[1]=0;v->equal=v->above=false;v->delay_remaining_us=2000000;
-    uint64_t now=v->io.time_us(v->io.context);v->deadline_us=now>UINT64_MAX-2000000?UINT64_MAX:now+2000000;
+    uint64_t now=v->io.time_us(v->io.context);v->last_time_us=now;
+    v->deadline_us=now>UINT64_MAX-2000000?UINT64_MAX:now+2000000;
     bool ok=preflight(v,command,ps,words,0) && run(v,command,ps,words,0);
     v->busy=false;return ok;
 }

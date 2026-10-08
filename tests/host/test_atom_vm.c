@@ -7,24 +7,38 @@ static atom_vm *vm;
 static uint8_t rom_bytes[32768],scratch[1032];
 static uint32_t regs[3][1024],parameters[256];
 static unsigned reads,writes,transactions,fail_at,cases,pc,base;
+static unsigned clock_calls,fail_clock_at,time_fault;
 static uint64_t now;
 static bool read_reg(void *ctx,enum atom_vm_space space,uint32_t index,uint32_t *out){
     (void)ctx;transactions++;if(transactions==fail_at)return false;
     if(space>ATOM_VM_MC || index>=1024)return false;
-    reads++;*out=regs[space][index];return true;
+    reads++;*out=regs[space][index];
+    if(time_fault==1)now-=500;else if(time_fault==2)now+=3000000;
+    return true;
 }
 static bool write_reg(void *ctx,enum atom_vm_space space,uint32_t index,uint32_t value){
     (void)ctx;transactions++;if(transactions==fail_at)return false;
     if(space>ATOM_VM_MC || index>=1024)return false;
-    writes++;regs[space][index]=value;return true;
+    writes++;regs[space][index]=value;
+    if(time_fault==3)now-=500;else if(time_fault==4)now+=3000000;
+    return true;
 }
-static bool delay(void *ctx,uint32_t us){(void)ctx;now+=us;return true;}
-static uint64_t clock_us(void *ctx){(void)ctx;return now++;}
+static bool delay(void *ctx,uint32_t us){
+    (void)ctx;now+=us;
+    if(time_fault==5)now-=500;else if(time_fault==6)now+=3000000;
+    return true;
+}
+static uint64_t clock_us(void *ctx){
+    (void)ctx;if(++clock_calls==fail_clock_at)now-=500;
+    uint64_t sample=now;if(now!=UINT64_MAX)now++;
+    return sample;
+}
 static void w16(unsigned off,unsigned value){rom_bytes[off]=(uint8_t)value;rom_bytes[off+1]=(uint8_t)(value>>8);}
 static void checksum(void){unsigned sum=0;rom_bytes[32767]=0;for(unsigned i=0;i<32767;i++)sum+=rom_bytes[i];rom_bytes[32767]=(uint8_t)(0-sum);}
 static void fixture(void){
     memset(rom_bytes,0,sizeof(rom_bytes));memset(regs,0,sizeof(regs));memset(parameters,0,sizeof(parameters));memset(scratch,0,sizeof(scratch));
     scratch[1024]=0x91;scratch[1031]=0x73;reads=writes=transactions=fail_at=0;now=0;
+    clock_calls=fail_clock_at=time_fault=0;
     rom_bytes[0]=0x55;rom_bytes[1]=0xaa;w16(0x18,0x60);memcpy(rom_bytes+0x60,"PCIR",4);
     w16(0x64,0x1002);w16(0x66,0x73ff);w16(0x6a,24);w16(0x70,64);rom_bytes[0x75]=128;
     w16(0x48,0x80);w16(0x80,40);rom_bytes[0x82]=2;rom_bytes[0x83]=2;memcpy(rom_bytes+0x84,"ATOM",4);
@@ -145,8 +159,27 @@ static void mutations(void){
         (void)execute(16);CHECK(vm->steps<=vm->step_limit+1);
     }
 }
+static void time_limits(void){
+    fixture();begin(12,0x400,4,16);emit(1,5,4,1);emit(1,0,6,4);end();now=1000;
+    CHECK(execute(16));unsigned samples=clock_calls;
+    /* Every clock boundary, including after a posted write and the final
+     * EOT, must reject backwards time without executing later operations. */
+    for(unsigned n=2;n<=samples;n++){
+        fixture();begin(12,0x400,4,16);emit(1,5,4,1);emit(1,0,6,4);end();now=1000;fail_clock_at=n;
+        CHECK(!execute(16));CHECK(vm->error==ATOM_VM_IO && !vm->busy && clock_calls==n);
+    }
+    for(unsigned kind=1;kind<=6;kind++){
+        fixture();begin(12,0x400,4,16);
+        if(kind>=5){byte(81);byte(10);}else if(kind<=2)emit(2,0,0,4);else emit(1,5,4,1);
+        emit(1,5,6,2);end();now=1000;time_fault=kind;
+        CHECK(!execute(16));CHECK(vm->error==(kind&1?ATOM_VM_IO:ATOM_VM_LIMIT) && !vm->busy && !regs[0][6]);
+        CHECK(writes==(kind==3 || kind==4?1:0));
+    }
+    fixture();begin(12,0x400,4,16);emit(1,5,4,1);end();now=UINT64_MAX;
+    CHECK(!execute(16));CHECK(vm->error==ATOM_VM_LIMIT && !transactions && !vm->busy);
+}
 int main(void){
     vm=calloc(1,sizeof(*vm));if(!vm)return 1;
-    basic();lanes();control();nested();memory();wide_math();malformed();indirect_io();mutations();
+    basic();lanes();control();nested();memory();wide_math();malformed();indirect_io();mutations();time_limits();
     printf("{\"passed\":true,\"cases\":%u,\"board_bytecode_execution_implemented\":true,\"physical_modesetting_tested\":false}\n",cases);free(vm);return 0;
 }

@@ -37,7 +37,7 @@ typedef struct {
     bool equal,above,busy,ready;
     enum atom_vm_error error;
     unsigned steps,step_limit;
-    uint64_t deadline_us,delay_remaining_us;
+    uint64_t deadline_us,last_time_us,delay_remaining_us;
 } atom_vm;
 bool atom_vm_init(atom_vm *,const atom_rom *,const atom_vm_io *,uint8_t *scratch,size_t);
 /* Every reachable command is structurally checked before any hardware access.

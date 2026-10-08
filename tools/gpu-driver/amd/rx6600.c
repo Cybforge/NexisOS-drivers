@@ -14,6 +14,7 @@ static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock
     if(!out)return false;
     *out=0;rx6600_state *s=context;
     if(!s || !s->services || !s->ready || s->busy)return false;
+    if(s->firmware_changed || s->firmware_poisoned)return false;
     if(!resources(s)){fail(s,RX6600_RESOURCE);return false;}
     /* PSTATE_ALLOW is forced low by this fixed-floor model. Even an upward
      * UCLK request can require a transition; defer every such command until
@@ -47,6 +48,7 @@ static bool NEXIS_GPU_CALL display_clocks(void *context,const dcn302_dfs_request
     rx6600_state *s=context;
     if(!s || !s->services || s->busy || (!s->ready && op!=RX6600_DFS_RESTORE) || (unsigned)op>RX6600_DFS_RESTORE ||
        (op==RX6600_DFS_PREPARE?!r:r!=NULL))return false;
+    if(s->firmware_changed || s->firmware_poisoned)return false;
     if(op==RX6600_DFS_APPLY && (s->dfs_transaction.dirty || s->dfs_transaction.applied || s->dfs_transaction.poisoned))return false;
     /* RQ/DLG and watermarks are bound to these exact clocks. Restore them
      * before changing clocks, including a DFS rollback. */
@@ -98,6 +100,7 @@ static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *
     memset(out,0,sizeof(*out));rx6600_state *s=context;
     if(!s || !timing || !s->ready || s->busy || s->dfs_transaction.dirty || s->dfs_transaction.poisoned ||
        timing->hactive!=s->route.shape.hactive || timing->vactive!=s->route.shape.vactive)return false;
+    if(s->firmware_changed || s->firmware_poisoned)return false;
     s->busy=true;s->error=RX6600_BANDWIDTH;bool ok=false;enum rx6600_error error=prove(s);
     if(error){fail(s,error);goto done;}
     if(prepared && (!s->dfs_transaction.prepared || s->dfs_transaction.applied ||
@@ -140,11 +143,111 @@ static bool timing_guard(void *context){
     rx6600_state *s=context;
     return dpp_guard(context) && !dcn302_dpp_verify_installed(&s->io,&s->dpp_transaction);
 }
+static bool firmware_fault(rx6600_state *s,enum atom_vm_error e){
+    if(s->firmware_error==ATOM_VM_OK)s->firmware_error=e;
+    /* Even an index/data-port write may have posted before a reported error.
+     * Never reset or blindly repeat an uncertain hardware command. */
+    if(s->firmware_changed)s->firmware_poisoned=true;
+    return false;
+}
+static bool firmware_guard(rx6600_state *s){
+    if(s->firmware_poisoned || !timing_guard(s))return false;
+    for(unsigned sweep=0;sweep<2;sweep++){
+        for(unsigned p=0;p<5;p++){
+            uint32_t c,k,v;
+            if(!s->io.read(s,dcn302_register_bytes[p][DCN302_R_CONTROL],&c) ||
+               !s->io.read(s,dcn302_register_bytes[p][DCN302_R_CLOCK],&k) ||
+               !s->io.read(s,dcn302_register_bytes[p][DCN302_R_VTG],&v) ||
+               (c&(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK)) ||
+               (k&DCN302_BUSY_MASK) || (v&DCN302_VTG_ENABLE_MASK))return false;
+        }
+        bool connected=false;
+        if(dcn302_route_connected(&s->io,&s->board.paths[s->route.path],s->route.hpd,&connected) || !connected)return false;
+    }
+    return true;
+}
+static bool firmware_offset(rx6600_state *s,enum atom_vm_space space,uint32_t index,uint32_t *offset){
+    /* AMD cail_reg_* -> RREG32/WREG32 uses dword indices. The VM itself
+     * handles direct REG0's value<<2 rule; do not shift it again here.
+     * IIO writes, including index/data ports, use the same native mapping.
+     * Legacy PLL/MC operands have no native Navi23 port mapping. */
+    if(space!=ATOM_VM_MMIO)return firmware_fault(s,ATOM_VM_UNSUPPORTED);
+    uint64_t bytes=(uint64_t)index*4;
+    if(bytes>UINT32_MAX || bytes>s->registers.bytes || s->registers.bytes-bytes<4)return firmware_fault(s,ATOM_VM_BOUNDS);
+    *offset=(uint32_t)bytes;return true;
+}
+static bool firmware_read(void *context,enum atom_vm_space space,uint32_t index,uint32_t *out){
+    rx6600_state *s=context;uint32_t offset,value;
+    if(!out)return firmware_fault(s,ATOM_VM_INPUT);
+    *out=0;
+    if(!firmware_offset(s,space,index,&offset))return false;
+    if(!firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
+    if(!s->io.read(s,offset,&value))return firmware_fault(s,ATOM_VM_IO);
+    if(!firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
+    *out=value;return true;
+}
+static bool firmware_write(void *context,enum atom_vm_space space,uint32_t index,uint32_t value){
+    rx6600_state *s=context;uint32_t offset;
+    if(!firmware_offset(s,space,index,&offset))return false;
+    if(!firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
+    /* Pixel/PHY/stream setup must not start any scanout before the parent
+     * has completed link/clock/audio validation and the final activation. */
+    for(unsigned p=0;p<5;p++)if((offset==dcn302_register_bytes[p][DCN302_R_CONTROL] && (value&DCN302_MASTER_ENABLE_MASK)) ||
+       (offset==dcn302_register_bytes[p][DCN302_R_VTG] && (value&DCN302_VTG_ENABLE_MASK)))return firmware_fault(s,ATOM_VM_UNSUPPORTED);
+    s->firmware_changed=true;
+    if(!s->io.write(s,offset,value))return firmware_fault(s,ATOM_VM_IO);
+    return firmware_guard(s)?true:firmware_fault(s,ATOM_VM_IO);
+}
+static bool firmware_delay(void *context,uint32_t us){
+    rx6600_state *s=context;
+    if(us>2000000)return firmware_fault(s,ATOM_VM_LIMIT);
+    if(!firmware_guard(s) || !s->io.delay_us(s,us) || !firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
+    return true;
+}
+static enum atom_vm_error NEXIS_GPU_CALL firmware_command(void *context,enum atom_display_command command,uint32_t khz,unsigned action){
+    rx6600_state *s=context;
+    if(!s || !s->services || !s->ready || s->busy || s->firmware_poisoned || !s->dpp_transaction.applied ||
+       s->route.path>=s->board.count || (khz!=s->timing_transaction.timing.pixel_khz && khz!=s->clock.pixel_khz))return ATOM_VM_INPUT;
+    uint8_t parameters[60];unsigned bytes=0;const atom_board_path *path=&s->board.paths[s->route.path];
+    switch(command){
+        case ATOM_DISPLAY_PIXEL_CLOCK:
+            if(action || !atom_hdmi_pixel_parameters(parameters,path,s->route.otg,khz))return ATOM_VM_INPUT;
+            bytes=16;break;
+        case ATOM_DISPLAY_ENCODER:
+            if(action || !atom_hdmi_stream_parameters(parameters,s->route.stream,khz))return ATOM_VM_INPUT;
+            bytes=12;break;
+        case ATOM_DISPLAY_TRANSMITTER:{
+            atom_table table;if(!atom_rom_table(&s->firmware_rom,true,command,&table))return ATOM_VM_TABLE;
+            if(table.format!=1 || (table.revision!=6 && table.revision!=7))return ATOM_VM_UNSUPPORTED;
+            bytes=table.revision==6?32:60;
+            if(!(table.revision==6?atom_hdmi_transmitter_parameters(parameters,path,s->route.stream,s->route.hpd,khz,action):
+                 atom_hdmi_transmitter_v7_parameters(parameters,path,s->route.stream,s->route.hpd,khz,action)))return ATOM_VM_INPUT;
+            break;
+        }
+        default:return ATOM_VM_UNSUPPORTED;
+    }
+    s->busy=true;s->firmware_error=ATOM_VM_OK;
+    if(!s->firmware_vm.ready){
+        atom_vm_io io;volatile atom_vm_io *operations=&io;
+        operations->context=s;operations->read=firmware_read;operations->write=firmware_write;operations->delay_us=firmware_delay;operations->time_us=now;
+        if(!atom_vm_init(&s->firmware_vm,&s->firmware_rom,&io,s->firmware_scratch,sizeof(s->firmware_scratch)))s->firmware_error=s->firmware_vm.error;
+    }
+    if(s->firmware_error==ATOM_VM_OK && !firmware_guard(s))firmware_fault(s,ATOM_VM_IO);
+    enum atom_vm_error e=s->firmware_error;
+    if(e==ATOM_VM_OK)e=atom_display_execute(&s->firmware_vm,command,parameters,bytes);
+    if(s->firmware_error!=ATOM_VM_OK)e=s->firmware_error;
+    if(e==ATOM_VM_OK && !firmware_guard(s)){firmware_fault(s,ATOM_VM_IO);e=s->firmware_error;}
+    s->firmware_error=e;
+    if(e && s->firmware_changed){s->firmware_poisoned=true;fail(s,RX6600_CLOCK);}
+    if(!e){memset(s->firmware_parameters,0,sizeof(s->firmware_parameters));memcpy(s->firmware_parameters,parameters,bytes);s->firmware_parameter_bytes=bytes;}
+    s->busy=false;return e;
+}
 static bool NEXIS_GPU_CALL dpp_registers(void *context,enum rx6600_dpp_operation op){
     rx6600_state *s=context;
     if(!s || !s->services || s->busy || (unsigned)op>RX6600_DPP_RESTORE ||
        (!s->ready && op!=RX6600_DPP_RESTORE) || !s->dpp_transaction.prepared ||
        s->timing_transaction.dirty || s->timing_transaction.applied || s->timing_transaction.poisoned)return false;
+    if(s->firmware_changed || s->firmware_poisoned)return false;
     if(op==RX6600_DPP_APPLY && (s->dpp_transaction.dirty || s->dpp_transaction.applied || s->dpp_transaction.poisoned))return false;
     s->busy=true;
     enum dcn302_error e=op==RX6600_DPP_APPLY?dcn302_dpp_apply_disabled(&s->io,&s->dpp_transaction):
@@ -157,6 +260,7 @@ static bool NEXIS_GPU_CALL timing_registers(void *context,enum rx6600_timing_ope
     rx6600_state *s=context;
     if(!s || !s->services || s->busy || (unsigned)op>RX6600_TIMING_RESTORE ||
        (!s->ready && op!=RX6600_TIMING_RESTORE) || !s->timing_transaction.prepared)return false;
+    if(op==RX6600_TIMING_RESTORE && (s->firmware_changed || s->firmware_poisoned))return false;
     if(op==RX6600_TIMING_APPLY && (s->timing_transaction.dirty || s->timing_transaction.applied || s->timing_transaction.poisoned))return false;
     s->busy=true;
     enum dcn302_error e=op==RX6600_TIMING_APPLY?dcn302_timing_apply_disabled(&s->io,&s->timing_transaction):
@@ -170,6 +274,7 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
     if(!s || !s->services || s->busy || (unsigned)op>RX6600_HUBP_CANCEL ||
        (!s->ready && op!=RX6600_HUBP_RESTORE) ||
        (op==RX6600_HUBP_PREPARE?!timing:(timing!=NULL || prepared)))return false;
+    if(s->firmware_changed || s->firmware_poisoned)return false;
     dcn302_hubp_transaction *t=&s->hubp_transaction;
     dcn302_hubbub_transaction *w=&s->hubbub_transaction;
     dcn302_timing_transaction *q=&s->timing_transaction;
@@ -244,13 +349,14 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;
     if(!k->resource(k->service_context,0,&s->vram) || !k->resource(k->service_context,5,&s->registers) ||
        s->vram.reserved || s->registers.reserved || s->vram.flags!=(NEXIS_GPU_RESOURCE_MEMORY|NEXIS_GPU_RESOURCE_64BIT|NEXIS_GPU_RESOURCE_PREFETCH) ||
        !(s->registers.flags&NEXIS_GPU_RESOURCE_MEMORY) || !(s->registers.flags&NEXIS_GPU_RESOURCE_REGISTERS) ||
        (s->registers.flags&~15u) || s->registers.bytes<1024*1024)return fail(s,RX6600_RESOURCE);
     atom_rom rom;
     if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom))return fail(s,RX6600_ROM);
+    s->firmware_rom=rom;
     if(atom_board_open(&rom,&s->board)!=ATOM_BOARD_OK)return fail(s,RX6600_BOARD);
     if(atom_memory_open(&rom,&s->memory)!=ATOM_MEMORY_OK)return fail(s,RX6600_MEMORY);
     if(dcn302_reference_read(&s->io,s->board.reference_khz,&s->reference))return fail(s,RX6600_CLOCK);

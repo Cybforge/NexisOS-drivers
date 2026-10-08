@@ -11,11 +11,11 @@
     "tools/gpu-driver/amd/atom_board.c": "67319d25f3444eddf1927afdb9ca1b47a54a9a1c8dc0fe40217238c02716d605",
     "tools/gpu-driver/amd/atom_display_commands.c": "591f2a696509fe99b805c0e656b0f1206fbe55a986a7a6a05228da0af0e473b6",
     "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
-    "tools/gpu-driver/amd/atom_vm.c": "2bddbdd4084c1f7d5bf941b5cff1506cbe996d72f42dd21694aa28f90c38865a",
+    "tools/gpu-driver/amd/atom_vm.c": "108d3d85852f68072a84f1fa1a9ea6519335c85fe3c2319d78b80070d887fef7",
     "tools/gpu-driver/amd/atom_board.h": "776f9cc090ab38ae56b460084a1d42d5c5ed65948641bbf7f37fcc97c7edf321",
     "tools/gpu-driver/amd/atom_display_commands.h": "55efc4dbf3a5457684aed2b76d852243a0995702265b63e036777b02e5a3880d",
     "tools/gpu-driver/amd/atom_tables.h": "3bb63f8a49aa950cf22256e6012e98c604e6fe7db29ee950b45a2f9c9b6be48c",
-    "tools/gpu-driver/amd/atom_vm.h": "b53910e0be2ba76b88c54dc110d48be26c7d01d3bae35fa104d37330d6e07020",
+    "tools/gpu-driver/amd/atom_vm.h": "2d6880e489930641c795e8e8d8bc35279024e887f2d7c3e5e38c17d7d6f0db23",
     "scripts/test_atom_board.py": "ea7289cb0a496cec31384e30f29572780fffe22f815c3f1ac044d9d2179148e6"
   }
 }

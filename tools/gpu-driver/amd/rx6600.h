@@ -10,6 +10,7 @@
 #include "dcn302_hubbub.h"
 #include "dcn302_timing.h"
 #include "dcn302_dpp.h"
+#include "atom_display_commands.h"
 enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
 enum rx6600_hubp_operation {RX6600_HUBP_PREPARE,RX6600_HUBP_BLANK,RX6600_HUBP_APPLY,RX6600_HUBP_RESTORE,RX6600_HUBP_CANCEL};
 enum rx6600_timing_operation {RX6600_TIMING_APPLY,RX6600_TIMING_RESTORE};
@@ -35,6 +36,12 @@ typedef struct {
     dcn302_dpp_transaction dpp_transaction;
     dcn302_dfs_snapshot hubp_clock_target;
     uint32_t hubp_floor_mhz[4];
+    atom_rom firmware_rom;
+    atom_vm firmware_vm;
+    uint8_t firmware_scratch[65536],firmware_parameters[60];
+    unsigned firmware_parameter_bytes;
+    bool firmware_changed,firmware_poisoned;
+    enum atom_vm_error firmware_error;
     /* Retained native clock operation for the modeset transaction. The module
      * entry/probe does not invoke it; it is not a terminal/Store control. */
     bool (NEXIS_GPU_CALL *clock_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
@@ -53,6 +60,11 @@ typedef struct {
     /* Native float linebuffer/scaler and both physical cursor enables.
      * Apply after fetch/WM; restore after timing and before fetch/WM/clocks. */
     bool (NEXIS_GPU_CALL *dpp_registers)(void *,enum rx6600_dpp_operation);
+    /* Board-selected HDMI PLL/stream/PHY command parameters, native MMIO/IIO
+     * bytecode transport. No display activation or completed PLL readback.
+     * After writes, dependencies remain retained until the future full
+     * modeset/old-mode rollback proves hardware state; no silent release. */
+    enum atom_vm_error (NEXIS_GPU_CALL *firmware_command)(void *,enum atom_display_command,uint32_t,unsigned);
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
     uint64_t sampled_us;uint32_t sampled_frame;

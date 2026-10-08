@@ -9,7 +9,40 @@ implemented or verified.** Bochs/QEMU support does not count as a physical drive
 
 ## Latest external native code after r4
 
-The latest source increment adds the native DPP scaler/color/cursor transaction.
+The latest source increment connects the retained RX6600 to its board-firmware
+interpreter through real bounded BAR5 MMIO/IIO register services. Versioned HDMI
+PixelClock1.7, Encoder1.5 and Transmitter1.6/1.7 parameters use ROM-derived PHY,
+independent stream, OTG and HPD identities. DWORD indices become byte offsets;
+the direct REG0 value-shift belongs to the VM and is not repeated by the bridge.
+All accesses re-prove PCI extents, exact native DFS, six owned SMU floors,
+installed fetch/watermarks/reference/DPP, stopped OTG/VTG pipelines and HPD.
+Unsupported legacy PLL/MC operands, invalid versions/parameters, out-of-resource
+offsets and premature scanout activation fail explicitly. A possibly posted
+write retains dependencies; uncertain state cannot be silently replayed or
+released. There is no invented legacy register-port mapping or PCIe fallback.
+
+The audit found and fixed missing monotonic-clock checks in the interpreter.
+Backwards time now stops execution, and an expired IO deadline stops a slow
+read from being followed by a write within the same instruction. Read, write
+and delay boundaries are checked, including the end of a command. The retained
+module executes native direct and IIO commands at two distinct PIC bases, with
+every parent-register read and resource-query fault, reported/posted write
+failures, raw-read state loss, persistent pipeline/clock/PCI/reference/fetch/LB/
+HPD loss and backwards/expired time exercised. Windows host test calls explicitly
+respect the different private host/PIC callback conventions.
+
+Current RX6600 host/sanitizer checks passed 26,695 cases; the firmware interpreter
+passed 3,191 cases and board/command adapters passed 5,242. Ten checksum-pinned
+AMD primary sources verify the register mapping, IIO opcodes, action numbers
+and DCN302's actual firmware-based HDMI programming path. They also confirm
+the additional native pixel-resync requirement. Nominal firmware parameters
+or successful bytecode replies are not measured PLL frequency or sink lock.
+The physical board ROM and active pixels remain unverified. Full pixel-resync/
+PLL/PHY/link rollback, activation, AZALIA/audio DTO/HDA coordination, four other
+physical backends and the new physical-driver ISO remain required. The candidate
+is still outside the download catalog; shipped r4 ISO files are unchanged.
+
+The preceding DPP increment adds the native scaler/color/cursor transaction.
 It programs RGB8888 conversion and identity CNV crossbar, bypasses unity
 pre-degamma/CSC/CM and disables alpha/color key. Full recout/MPC dimensions,
 float linebuffer configuration0/max63 and native mode0 provide the RGB8 1:1
@@ -36,7 +69,7 @@ explicit guarded repair. A repeated apply now rejects before work without
 incorrectly marking an otherwise healthy retained parent as failed.
 
 DPP model/sanitizer checks passed 4,091 cases with 867,305 assertions; actual
-retained RX6600 code passed 1,813 cases at direct and two distinct PIC bases,
+retained RX6600 code initially passed 1,813 cases at direct and two distinct PIC bases,
 including every DPP apply/restore write failure, posted/ignored writes and
 persistent clock/PCI/reference/fetch/LB/pipeline loss at each apply write.
 DML math/sanitizer checks passed 467 cases with 925 assertions. These prove

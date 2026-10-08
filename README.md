@@ -67,6 +67,23 @@ verifies the installed DPP path and must restore before DPP; DPP restores before
 fetch/WM/clocks, with old cursors last. Posted/ignored writes, lost native state,
 explicit restoration and repeat-apply rejection execute at both PIC addresses.
 These model checks do not prove active physical pixels or a completed modeset.
+The retained RX6600 now connects its bounded ATOM interpreter to the actual
+BAR5 register services. Firmware-selected MMIO/IIO uses checked DWORD-to-byte
+offsets, with direct REG0's value shift applied exactly once by the VM.
+Board-derived HDMI parameters select the real PHY, independent stream, OTG
+and HPD, with PixelClock1.7, Encoder1.5 and Transmitter1.6/1.7 validation.
+Every access re-proves stopped scanout, PCI resources, all six clock floors,
+installed fetch/watermarks/reference and DPP state. Legacy PLL/MC operands and
+early scanout activation fail explicitly. Possibly posted writes quarantine
+dependencies; they cannot be reset, silently replayed or released. No request
+or bytecode reply is advertised as measured PLL frequency or sink lock.
+The VM now rejects backwards clocks and expired deadlines at IO boundaries,
+including a slow read followed by a write in the same instruction. Native
+code executes at two distinct retained PIC bases, with every parent read and
+resource-query failure, raw-read/write/delay time faults and persistent lost
+state checked. Ten pinned primary AMD sources verify the native semantics.
+The board's actual ROM has not been executed on physical hardware. Complete
+pixel resync, PLL/PHY/link rollback, activation/readback and audio remain open.
 Full modeset composition, active scaling/color/cursor proof, pixel PLL/PHY and coordinated HDMI
 audio modesetting remain pending; it is not a complete card driver or catalog package. See
 `docs/PHYSICAL_DISPLAY_2026-10-07.md`.
@@ -124,6 +141,7 @@ A physical RX6600 driver needs AMD-specific device/firmware initialization, disp
 - `tools/gpu-driver/amd/dcn302_hubbub.c`: native reference-clock selection/divider, four checked watermark sets and fixed-floor memory/self-refresh policy with verified reverse rollback; no physical transition-completion claim.
 - `tools/gpu-driver/amd/dcn302_timing.c`: native stopped geometry/global-sync with DCN3 update lock, bounded pending drain, buffering policy and parent-guarded rollback before releasing fetch/WM/clocks; no PLL/PHY/scanout activation claim.
 - `tools/gpu-driver/amd/dcn302_dpp.c`: native RGB8 conversion/color bypass, float-format 1:1 scaler/linebuffer and both physical cursor controls; status-safe stopped/powered guarded writes and reverse restoration before fetch/WM/clocks.
+- `scripts/verify_rx6600_firmware_reference.py`: checksum-pinned primary-source verification of native ATOM MMIO/IIO semantics, command versions/actions and the additional pixel-resync requirement; no physical hardware claim.
 - `tools/gpu-driver/amd/dml/`: checksum-pinned AMD MIT math source with original notices and reproducible platform-only adaptations.
 - `scripts/import_dcn30_dml.py`: verifies upstream hashes, preserves the algorithm and excludes board/clock placeholders from the ASIC template.
 - `scripts/test_dcn302_dml.py`: complete math and real retained PIC calculations, FP-state/error recovery and sanitizer checks; no claim of physical hardware verification.

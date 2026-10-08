@@ -6,7 +6,7 @@
   },
   "atom_vm": {
     "passed": true,
-    "cases": 3162,
+    "cases": 3191,
     "board_bytecode_execution_implemented": true,
     "physical_modesetting_tested": false,
     "undefined_behavior_sanitizer_passed": true
@@ -20,9 +20,9 @@
   "source_sha256": {
     "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
     "tools/gpu-driver/amd/atom_tables.h": "3bb63f8a49aa950cf22256e6012e98c604e6fe7db29ee950b45a2f9c9b6be48c",
-    "tools/gpu-driver/amd/atom_vm.c": "2bddbdd4084c1f7d5bf941b5cff1506cbe996d72f42dd21694aa28f90c38865a",
-    "tools/gpu-driver/amd/atom_vm.h": "b53910e0be2ba76b88c54dc110d48be26c7d01d3bae35fa104d37330d6e07020",
-    "tests/host/test_atom_vm.c": "e66d69b6e3b9e8625c22c8bf69930755523a7e3519ad53242d41b0b5e8334f69",
+    "tools/gpu-driver/amd/atom_vm.c": "108d3d85852f68072a84f1fa1a9ea6519335c85fe3c2319d78b80070d887fef7",
+    "tools/gpu-driver/amd/atom_vm.h": "2d6880e489930641c795e8e8d8bc35279024e887f2d7c3e5e38c17d7d6f0db23",
+    "tests/host/test_atom_vm.c": "2bcbc383c3ac5addbe6b524f4ac62b57af8ebdf40b15804635e2deecface80f9",
     "boot/efi/gpu_rom.h": "fe3e4691f3e20ce53fbda55008147922e239bdee3ed631f8e09e546cc432b0a3"
   },
   "native_modesetting_implemented": false

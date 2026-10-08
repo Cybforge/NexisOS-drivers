@@ -1,0 +1,47 @@
+{
+  "passed": true,
+  "reference": "AMD source in Linux v6.12",
+  "upstream_sha256": {
+    "amdgpu_atombios.c": "ae8a41ffd9baafeeedd213b589389eca8be6cf68fe8c33f837b7d5ec63d64113",
+    "amdgpu_device.c": "21aad0f99d79228ec510027bef536e28f935dd401d8f2d2dc3c105c88adb260a",
+    "amdgpu.h": "5c53aa4ffb811ff17284223c5dc497abece1285d616a10f1a6ab80d7e4f93c2c",
+    "atom.c": "b1ab6cc60d67d21691a4d0c265bca4fa3c63665fd8926de97986ed914e22627d",
+    "atom.h": "1b1682ac01d0d2a8f16ef66107903d37184c8a284da4f833a249b9cadfa33f77",
+    "command_table2.c": "e9d9f3bb2b394941bd634a59bbeaaaae1d907d14cb8a98bad9b26386ea2c353a",
+    "atomfirmware.h": "95d7856f6449579faf3983760f2d9f4a171327cac431d968b6625bbe38e5e49a",
+    "dce_clock_source.c": "3b33716ab57f6a6fc7e751eb5137e33b529c7e857fb746aacd8a6b985a064f71",
+    "dce_clock_source.h": "05f62c78350293f5ea87b0e1eead3a4ad84c625a3e7c6aa30d3a51fce771d1ed",
+    "dcn302_resource.c": "54362248c36a9ee830042b6a220637ff678b56cb6772fd3f43139a9315cca4bc"
+  },
+  "upstream_urls": {
+    "amdgpu_atombios.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_atombios.c",
+    "amdgpu_device.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c",
+    "amdgpu.h": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/amdgpu/amdgpu.h",
+    "atom.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/amdgpu/atom.c",
+    "atom.h": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/amdgpu/atom.h",
+    "command_table2.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/display/dc/bios/command_table2.c",
+    "atomfirmware.h": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/include/atomfirmware.h",
+    "dce_clock_source.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/display/dc/dce/dce_clock_source.c",
+    "dce_clock_source.h": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/display/dc/dce/dce_clock_source.h",
+    "dcn302_resource.c": "https://raw.githubusercontent.com/torvalds/linux/v6.12/drivers/gpu/drm/amd/display/dc/resource/dcn302/dcn302_resource.c"
+  },
+  "dword_to_byte_mmio_mapping_verified": true,
+  "direct_reg0_value_shift_owned_by_vm": true,
+  "iio_attribute_and_data_opcode_numbers_verified": true,
+  "modern_legacy_pll_mc_callbacks_unused": true,
+  "native_dcn302_hdmi_calls_board_firmware": true,
+  "native_hdmi_also_requires_pixel_resync": true,
+  "nominal_pll_parameters_are_not_measured_clock": true,
+  "scope": "Bounded direct BAR5 MMIO and ROM-selected IIO. Legacy PLL/MC operands, out-of-resource accesses and early scanout activation fail explicitly. No invented PCIe fallback. No claim of complete physical modeset or HDMI audio.",
+  "source_sha256": {
+    "scripts/verify_rx6600_firmware_reference.py": "ec5835b9d94eca478f04122516ee96339c01b9c524c024790ccd08180b2985d9",
+    "tools/gpu-driver/amd/rx6600.c": "9082a6d650dc7dbc54cfe24f358e3660b06d8a1d39be6af2a43bd9a46ab60a40",
+    "tools/gpu-driver/amd/rx6600.h": "4b16621cedc983d5f13109e94c6298ca9b0a5a6f7235d0813de2900b329113a2",
+    "tools/gpu-driver/amd/atom_vm.c": "108d3d85852f68072a84f1fa1a9ea6519335c85fe3c2319d78b80070d887fef7",
+    "tools/gpu-driver/amd/atom_vm.h": "2d6880e489930641c795e8e8d8bc35279024e887f2d7c3e5e38c17d7d6f0db23",
+    "tools/gpu-driver/amd/atom_display_commands.c": "591f2a696509fe99b805c0e656b0f1206fbe55a986a7a6a05228da0af0e473b6",
+    "tools/gpu-driver/amd/atom_display_commands.h": "55efc4dbf3a5457684aed2b76d852243a0995702265b63e036777b02e5a3880d"
+  },
+  "physical_hardware_tested": false,
+  "full_rx6600_driver_complete": false
+}

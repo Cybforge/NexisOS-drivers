@@ -46,46 +46,46 @@
     },
     "atom_vm_execute": {
       "address": 27408,
-      "bytes": 290
+      "bytes": 297
     },
     "atom_vm_init": {
       "address": 26464,
       "bytes": 929
     },
     "atom_board_open": {
-      "address": 34864,
+      "address": 36048,
       "bytes": 1220
     },
     "atom_display_execute": {
-      "address": 38416,
-      "bytes": 628
+      "address": 39600,
+      "bytes": 635
     },
     "dcn302_route_find": {
-      "address": 39312,
+      "address": 40496,
       "bytes": 4062
     },
     "dcn302_surface_bind": {
-      "address": 43376,
+      "address": 44560,
       "bytes": 3271
     },
     "atom_hdmi_pixel_parameters": {
-      "address": 37024,
+      "address": 38208,
       "bytes": 289
     },
     "atom_hdmi_stream_parameters": {
-      "address": 37328,
+      "address": 38512,
       "bytes": 160
     },
     "atom_hdmi_transmitter_parameters": {
-      "address": 37488,
+      "address": 38672,
       "bytes": 527
     },
     "atom_hdmi_transmitter_v7_parameters": {
-      "address": 38016,
+      "address": 39200,
       "bytes": 390
     },
     "dcn302_route_connected": {
-      "address": 39056,
+      "address": 40240,
       "bytes": 254
     }
   },
@@ -93,7 +93,7 @@
     "bytes": 53312,
     "memory_bytes": 196608,
     "services_bytes": 112,
-    "sha256": "a3bcfced017798cd7fa587ec2ab5578b2cbf658a6e2c9c5c183e79bc73ed8ea7"
+    "sha256": "1807ded674a7b331bd09d4b00f206ae12d0bbf09e6df643b045fdc3c1ed74fa2"
   },
   "distributed": false,
   "physical_card_driver": false,
@@ -106,7 +106,7 @@
     "tools/gpu-driver/amd/dcn302_hdmi.c": "78b0057c8ca6951f0f707aa2d200b8f4ee2c4ec009ec3099022bd8a9a42318c2",
     "tools/gpu-driver/amd/hdmi_scdc.c": "00989b9bb9c256a3100cff2366b76a884a5a4acb62b437b5240dd41c1957edc4",
     "tools/gpu-driver/amd/atom_tables.c": "4124aa7b73c29b25523e151bcae3bb421e2fd4ef97aecd901f9a5545ab1be235",
-    "tools/gpu-driver/amd/atom_vm.c": "2bddbdd4084c1f7d5bf941b5cff1506cbe996d72f42dd21694aa28f90c38865a",
+    "tools/gpu-driver/amd/atom_vm.c": "108d3d85852f68072a84f1fa1a9ea6519335c85fe3c2319d78b80070d887fef7",
     "tools/gpu-driver/common/memory.c": "a596316cccd05375498d4c44177f5b6a5a54503a8fb001f43a81804ada96ffdf",
     "tools/gpu-driver/amd/atom_board.c": "67319d25f3444eddf1927afdb9ca1b47a54a9a1c8dc0fe40217238c02716d605",
     "tools/gpu-driver/amd/atom_display_commands.c": "591f2a696509fe99b805c0e656b0f1206fbe55a986a7a6a05228da0af0e473b6",
