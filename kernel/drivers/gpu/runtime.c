@@ -5,6 +5,7 @@
 #include "../serial.h"
 #include "../../include/bootinfo.h"
 #include "../../include/string.h"
+#include "../../sys/locale.h"
 #include "../../mm/pmm.h"
 #include "../../mm/vmm.h"
 #include "../../arch/x86_64/pit.h"
@@ -38,7 +39,7 @@ static void NEXIS_GPU_CALL service_log(void *context,const char *text){
     if(context!=&R || !text)return;
     char line[200];size_t n=0;
     while(n<sizeof(line)-1 && text[n]){unsigned char c=(unsigned char)text[n];line[n]=(c>=32 && c<127)?(char)c:'?';n++;}
-    line[n]=0;kprintf("[GPU:%s] %s\n",R.name[0]?R.name:"module",line);
+    line[n]=0;kprintf("[GPU:%s] %s\n",R.name[0]?R.name:tr("Modul"),line);
 }
 static bool register_address(void *context,unsigned bar,uint32_t offset,uint64_t *out){
     if(context!=&R || bar>=6 || (offset&3) || !R.bar[bar] || R.bar_bytes[bar]<4 || offset>R.bar_bytes[bar]-4)return false;
@@ -66,7 +67,7 @@ static bool device_ready(const pci_device_t *d){
 }
 /* A rejected resource query is logged once per module load (the module asks again for every register transaction). */
 static bool resource_reject(const char *why,unsigned bar){
-    if(!R.reject_logged){R.reject_logged=true;kprintf("[GPU] PCI resource query for BAR%u rejected: %s\n",bar,why);}
+    if(!R.reject_logged){R.reject_logged=true;kprintf("[GPU] PCI-Ressourcenabfrage für BAR%u abgelehnt: %s\n",bar,tr(why));}
     return false;
 }
 static bool NEXIS_GPU_CALL resource(void *context,unsigned bar,nexis_gpu_resource *out){
@@ -74,20 +75,20 @@ static bool NEXIS_GPU_CALL resource(void *context,unsigned bar,nexis_gpu_resourc
     memset(out,0,sizeof(*out));
     if(context!=&R || bar>=6)return false;
     const nexis_boot_info_t *boot=bootinfo_get();const pci_device_t *d=&R.device;
-    if(!boot)return resource_reject("no boot info",bar);
-    if(!device_ready(d))return resource_reject("adapter not ready (vendor/class/memory-enable/header type)",bar);
+    if(!boot)return resource_reject("keine Boot-Information",bar);
+    if(!device_ready(d))return resource_reject("Adapter nicht bereit (Hersteller/Klasse/Speicher-Freigabe/Header-Typ)",bar);
     uint32_t raw[6],again[6];uint64_t base[6],bytes[6];read_bars(d,raw);firmware_ranges(boot,base,bytes);
     nexis_gpu_resource live;
-    if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live))return resource_reject("BAR does not match the UEFI-reported extent",bar);
+    if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live))return resource_reject("BAR stimmt nicht mit dem von UEFI gemeldeten Bereich überein",bar);
     if(live.base!=R.resources[bar].base || live.bytes!=R.resources[bar].bytes ||
-       live.flags!=(R.resources[bar].flags&~NEXIS_GPU_RESOURCE_REGISTERS))return resource_reject("BAR changed since the module was loaded",bar);
+       live.flags!=(R.resources[bar].flags&~NEXIS_GPU_RESOURCE_REGISTERS))return resource_reject("BAR seit dem Laden des Moduls geändert",bar);
     read_bars(d,again);
-    if(memcmp(raw,again,sizeof(raw)) || !device_ready(d))return resource_reject("BARs changed during the query",bar);
+    if(memcmp(raw,again,sizeof(raw)) || !device_ready(d))return resource_reject("BARs während der Abfrage geändert",bar);
     /* Confirm this aperture last, after the full sweeps. PCI display changes
      * are serialized by the caller; this also detects a late BAR mutation
      * after its slot was read early in a sweep. Never write/probe a BAR. */
-    if((live.flags&NEXIS_GPU_RESOURCE_64BIT) && pci_read_dword(d->bus,d->slot,d->func,0x14+bar*4)!=raw[bar+1])return resource_reject("upper BAR half changed",bar);
-    if(pci_read_dword(d->bus,d->slot,d->func,0x10+bar*4)!=raw[bar])return resource_reject("BAR changed",bar);
+    if((live.flags&NEXIS_GPU_RESOURCE_64BIT) && pci_read_dword(d->bus,d->slot,d->func,0x14+bar*4)!=raw[bar+1])return resource_reject("oberer BAR-Teil geändert",bar);
+    if(pci_read_dword(d->bus,d->slot,d->func,0x10+bar*4)!=raw[bar])return resource_reject("BAR geändert",bar);
     *out=R.resources[bar];return true;
 }
 static void release(bool stop){
@@ -97,7 +98,7 @@ static void release(bool stop){
         /* Free only after all identity aliases are writable again. */
         if(vmm_protect_identity(R.physical,R.pages*4096,PAGE_WRITABLE|PAGE_NO_EXECUTE))
             for(size_t n=0;n<R.pages;n++)pmm_free_page(R.physical+n*4096);
-        else kprintf("[GPU] Module pages quarantined: identity protection restore failed\n");
+        else kprintf("[GPU] Modulseiten unter Quarantäne: Wiederherstellung des Identitätsschutzes fehlgeschlagen\n");
     }
     memset(&R,0,sizeof(R));display_clear_native_mode();
 }
@@ -166,7 +167,7 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
         /* One line per BAR: this is the first thing to read if a driver reports a resource problem. */
         if(!gpu_pci_resource_decode(raw,base_ranges,byte_ranges,n,&R.resources[n])){
             if(raw[n] || byte_ranges[n])
-                kprintf("[GPU] BAR%u not usable: config %08x, firmware extent %llx + %llx\n",n,raw[n],(unsigned long long)base_ranges[n],(unsigned long long)byte_ranges[n]);
+                kprintf("[GPU] BAR%u nicht nutzbar: Konfiguration %08x, Firmware-Bereich %llx + %llx\n",n,raw[n],(unsigned long long)base_ranges[n],(unsigned long long)byte_ranges[n]);
             continue;
         }
         uint64_t base=R.resources[n].base,size=R.resources[n].bytes;
@@ -176,8 +177,8 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
             R.resources[n].flags|=NEXIS_GPU_RESOURCE_REGISTERS;
             mapped=true;
         }
-        kprintf("[GPU] BAR%u: %llx + %llx flags %x%s\n",n,(unsigned long long)base,(unsigned long long)size,R.resources[n].flags,
-                mapped?" (registers mapped)":(size>16*1024*1024?" (aperture, not mapped)":" (MAPPING FAILED)"));
+        kprintf("[GPU] BAR%u: %llx + %llx Flags %x%s\n",n,(unsigned long long)base,(unsigned long long)size,R.resources[n].flags,
+                tr(mapped?" (Register abgebildet)":(size>16*1024*1024?" (Aperturbereich, nicht abgebildet)":" (ABBILDUNG FEHLGESCHLAGEN)")));
     }
     R.services=(nexis_gpu_services){2,image.services_bytes,fb_get_width(),fb_get_height(),fb_get_pitch(),fb_is_rgb()?0:1,
         device->vendor_id,device->device_id,device->bus,device->slot,device->func,0,fb_front_base(),fb_front_size(),
@@ -189,7 +190,7 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
     R.driver.abi=2;R.driver.size=sizeof(R.driver);R.calling=true;
     nexis_gpu_entry_v2 entry=(void *)(uintptr_t)(BASE+image.entry);
     int result=entry(&R.services,&R.driver);R.calling=false;
-    if(result || !validate_driver()){kprintf("[GPU] Retained module initialization rejected (%d)\n",result);release(false);return false;}
+    if(result || !validate_driver()){kprintf("[GPU] Beibehaltene Modulinitialisierung abgelehnt (%d)\n",result);release(false);return false;}
     const edid_monitor *monitor=display_monitor_get();nexis_gpu_scanout actual;
     /* Remember the firmware mode so a trial can be reverted. */
     R.have_initial=scanout(&R.initial);
@@ -197,19 +198,19 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
     const edid_timing *chosen=monitor?edid_select_rgb8(monitor,fb_get_width(),fb_get_height(),&limits):NULL;
     if(chosen && !R.have_initial){
         /* Never change a mode that cannot be restored. */
-        kprintf("[GPU] Firmware mode could not be read back; native mode change refused\n");release(true);return false;
+        kprintf("[GPU] Firmware-Modus konnte nicht zurückgelesen werden; Wechsel in den nativen Modus abgelehnt\n");release(true);return false;
     }
     if(chosen){
         desired=*chosen;
         desired.flags&=3u;nexis_gpu_timing target;memcpy(&target,&desired,sizeof(target));
         if(!R.driver.set_mode(R.driver.state,&target) || !scanout(&actual) || !nexis_gpu_mode_readback_matches(&actual,&target)){
-            kprintf("[GPU] Native mode rejected or hardware readback differs; restoring prior output\n");release(true);return false;
+            kprintf("[GPU] Nativer Modus abgelehnt oder Hardware-Rücklesung weicht ab; vorherige Ausgabe wird wiederhergestellt\n");release(true);return false;
         }
     }else if(!scanout(&actual)){release(true);return false;}
     if(!fb_native_activate(actual.framebuffer,actual.pitch,actual.format,R.name)){release(true);return false;}
     memcpy(&desired,&actual.timing,sizeof(desired));display_set_native_mode(&desired);
     R.resident=R.active=true;R.audio=(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0;R.last_poll_us=time_us(&R);
-    kprintf("[GPU] Retained native module: %s, hardware mode %u.%03u Hz; HDMI packets %u\n",R.name,
+    kprintf("[GPU] Beibehaltenes natives Modul: %s, Hardware-Modus %u.%03u Hz; HDMI-Pakete %u\n",R.name,
         edid_refresh_millihz(&desired)/1000,edid_refresh_millihz(&desired)%1000,(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0);
     return true;
 }

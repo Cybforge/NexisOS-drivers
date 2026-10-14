@@ -52,6 +52,7 @@
 #include "../../include/bootinfo.h"
 #include "../../include/string.h"
 #include "../../sys/cmdline.h"
+#include "../../sys/locale.h"
 #include "../../lib/coop.h"
 #include "../../audio/audio.h"
 #include "../../arch/x86_64/pit.h"
@@ -106,7 +107,7 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 static void write_synced(const char *path, const void *data, size_t size) {
-    if (!vfs_write_file(path, data, size)) { kprintf("[GPU] Cannot write %s\n", path); return; }
+    if (!vfs_write_file(path, data, size)) { kprintf("[GPU] Schreiben von %s fehlgeschlagen\n", path); return; }
     vfs_node_t *n = vfs_lookup(path);
     if (n) { vfs_chmod_node(n, 0644); vfs_sync_node(n); }
 }
@@ -142,15 +143,15 @@ static void trial_finish(bool keep) {
     P.trial = false;
     if (keep) {
         marker_clear();
-        kprintf("[GPU] Display mode confirmed by the user\n");
+        kprintf("[GPU] Anzeigemodus vom Benutzer bestätigt\n");
         notify_post("Grafiktreiber", "Anzeigemodus behalten", "Der native Treiber bleibt aktiv.", NOTIFY_SUCCESS);
         return;
     }
     bool ok = gpu_runtime_revert();
     marker_clear(); /* a clean, user-visible revert is not a crash */
     P.loaded = false;
-    kprintf("[GPU] Display mode reverted to firmware output (%s)\n", ok ? "ok" : "restore failed");
-    notify_post("Grafiktreiber", ok ? "Zurueckgesetzt" : "Zuruecksetzen fehlgeschlagen",
+    kprintf("[GPU] Anzeigemodus auf Firmware-Ausgabe zurückgesetzt (%s)\n", tr(ok ? "ok" : "Wiederherstellung fehlgeschlagen"));
+    notify_post("Grafiktreiber", ok ? "Zurückgesetzt" : "Zurücksetzen fehlgeschlagen",
                 ok ? "Firmware-Anzeige wieder aktiv." : "Bitte neu starten (Option nogpudriver).", ok ? NOTIFY_WARNING : NOTIFY_ERROR);
 }
 
@@ -172,15 +173,15 @@ static void trial_tick(void) {
     uint64_t now = pit_get_ticks();
     if (now >= P.trial_end) { trial_finish(false); return; }
     uint64_t left = P.trial_end - now;
-    if (P.trial_stage == 1 && left < 10000) { P.trial_stage = 2; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Noch 10 s bis zum Rueckfall", NOTIFY_WARNING); }
-    else if (P.trial_stage == 2 && left < 5000) { P.trial_stage = 3; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Noch 5 s bis zum Rueckfall", NOTIFY_WARNING); }
+    if (P.trial_stage == 1 && left < 10000) { P.trial_stage = 2; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurück", "Noch 10 s bis zum Rückfall", NOTIFY_WARNING); }
+    else if (P.trial_stage == 2 && left < 5000) { P.trial_stage = 3; notify_post("Grafiktreiber", "Enter = behalten, Esc = zurück", "Noch 5 s bis zum Rückfall", NOTIFY_WARNING); }
 }
 
 static void trial_begin(void) {
     P.trial = true;
     P.trial_end = pit_get_ticks() + TRIAL_MS;
     P.trial_stage = 1;
-    notify_post("Grafiktreiber", "Enter = behalten, Esc = zurueck", "Ohne Eingabe: Rueckfall in 15 s", NOTIFY_WARNING);
+    notify_post("Grafiktreiber", "Enter = behalten, Esc = zurück", "Ohne Eingabe: Rückfall in 15 s", NOTIFY_WARNING);
 }
 
 /* ---- package selection / loading --------------------------------------- */
@@ -193,7 +194,7 @@ static bool entry_matches(const gpu_catalog_entry *e, uint16_t vendor, uint16_t 
 
 static void select_package(void) {
     P.selected = true;
-    if (cmdline_has("nogpudriver")) { kprintf("[GPU] Driver loading disabled (nogpudriver)\n"); P.finished = true; return; }
+    if (cmdline_has("nogpudriver")) { kprintf("[GPU] Treiberladen deaktiviert (nogpudriver)\n"); P.finished = true; return; }
     const nexis_boot_info_t *boot = bootinfo_get();
     if (!boot || !boot->gpu_vendor) { P.finished = true; return; }
     uint16_t vendor = boot->gpu_vendor, device = boot->gpu_device;
@@ -202,11 +203,11 @@ static void select_package(void) {
         if (d->class_id == 3 && d->vendor_id == vendor && d->device_id == device && d->bus == bus && d->slot == slot && d->func == func) { P.device = d; break; }
     for (unsigned i = 0; i < GPU_CATALOG_COUNT; i++) if (entry_matches(&gpu_catalog[i], vendor, device)) { P.entry = &gpu_catalog[i]; break; }
     if (!P.device || !P.entry) {
-        kprintf("[GPU] No driver package for PCI %04x:%04x; firmware framebuffer retained, nothing downloaded\n", vendor, device);
+        kprintf("[GPU] Kein Treiberpaket für PCI %04x:%04x; Firmware-Framebuffer bleibt erhalten, nichts heruntergeladen\n", vendor, device);
         P.finished = true;
         return;
     }
-    kprintf("[GPU] Primary adapter PCI %04x:%04x -> package '%s' (hidden background job, no Store entry)\n", vendor, device, P.entry->name);
+    kprintf("[GPU] Primärer Adapter PCI %04x:%04x -> Paket '%s' (verborgener Hintergrundauftrag, kein Store-Eintrag)\n", vendor, device, P.entry->name);
 }
 
 /* Starts the verified module for the selected adapter (crash marker first, trial prompt after). */
@@ -233,8 +234,8 @@ static void countdown_tick(void) {
         countdown_release();
         P.cancel = false;
         P.declined = true;
-        kprintf("[GPU] Driver '%s' skipped by the user; firmware display retained for this boot\n", P.entry->name);
-        notify_post("Grafiktreiber", "Uebersprungen", "Firmware-Anzeige bleibt bis zum naechsten Start.", NOTIFY_WARNING);
+        kprintf("[GPU] Treiber '%s' vom Benutzer übersprungen; Firmware-Anzeige bleibt für diesen Start erhalten\n", P.entry->name);
+        notify_post("Grafiktreiber", "Übersprungen", "Firmware-Anzeige bleibt bis zum nächsten Start.", NOTIFY_WARNING);
         return;
     }
     uint64_t now = pit_get_ticks();
@@ -245,7 +246,7 @@ static void countdown_tick(void) {
         P.hold = NULL; /* ownership moves to this frame; pending drops first so no key or poll can touch the copy */
         P.pending = false;
         if (!start_module(module, bytes, version)) {
-            kprintf("[GPU] Package '%s' could not be activated\n", P.entry->name);
+            kprintf("[GPU] Paket '%s' konnte nicht aktiviert werden\n", P.entry->name);
             notify_post("Grafiktreiber", "Konnte nicht gestartet werden", "Firmware-Anzeige bleibt. Details: Terminal, dmesg", NOTIFY_ERROR);
         }
         kfree(module);
@@ -254,7 +255,7 @@ static void countdown_tick(void) {
     uint64_t left = P.countdown_end - now;
     if (P.countdown_stage == 1 && left < 5000) {
         P.countdown_stage = 2;
-        notify_post("Grafiktreiber", "Start in 5 s", "Esc = ueberspringen", NOTIFY_WARNING);
+        notify_post("Grafiktreiber", "Start in 5 s", "Esc = überspringen", NOTIFY_WARNING);
     }
 }
 
@@ -265,7 +266,7 @@ static bool load_package(const uint8_t *file, size_t size, uint32_t *version) {
     if (!gpu_package_open(file, size, P.entry->name, P.entry->min_version, &view)) return false;
     *version = view.version;
     if (P.marker_version && view.version <= P.marker_version) {
-        kprintf("[GPU] Package '%s' v%u did not finish starting last time; skipped until a newer version exists\n", P.entry->name, view.version);
+        kprintf("[GPU] Paket '%s' v%u ist beim letzten Start nicht fertig geworden; wird übersprungen, bis eine neuere Version existiert\n", P.entry->name, view.version);
         return false;
     }
     if (!P.entry->trial || cmdline_has("gpuautokeep")) return start_module(view.module, view.module_bytes, view.version);
@@ -278,8 +279,8 @@ static bool load_package(const uint8_t *file, size_t size, uint32_t *version) {
     P.pending = true;
     P.countdown_stage = 1;
     P.countdown_end = pit_get_ticks() + COUNTDOWN_MS;
-    kprintf("[GPU] Package '%s' v%u verified; starting in %u s unless Esc is pressed\n", P.entry->name, view.version, COUNTDOWN_MS / 1000u);
-    notify_post("Grafiktreiber", "Start in 10 s", "Esc = ueberspringen", NOTIFY_WARNING);
+    kprintf("[GPU] Paket '%s' v%u geprüft; Start in %u s, sofern Esc nicht gedrückt wird\n", P.entry->name, view.version, COUNTDOWN_MS / 1000u);
+    notify_post("Grafiktreiber", "Start in 10 s", "Esc = überspringen", NOTIFY_WARNING);
     return true;
 }
 
@@ -290,13 +291,13 @@ static void start_mirror(void) {
     http_options_t opts = {0};
     opts.url = url; opts.max_body = MAX_FILE; opts.timeout_ms = 15000; opts.no_cookies = true; opts.identity_encoding = true;
     P.request = http_request_start(&opts);
-    if (P.request) kprintf("[GPU] Background download of package '%s' (%s)\n", P.entry->name, P.refresh ? "update check" : "driver needed");
+    if (P.request) kprintf("[GPU] Hintergrund-Download des Pakets '%s' (%s)\n", P.entry->name, tr(P.refresh ? "Aktualisierungsprüfung" : "Treiber benötigt"));
 }
 
 static void next_mirror_or_finish(void) {
     if (!cmdline_has("gpudriverlocal") && ++P.mirror < GPU_MIRROR_COUNT) return; /* try the next mirror on the next poll */
     P.finished = true;
-    if (!P.loaded && !P.refresh) kprintf("[GPU] Driver unavailable; firmware display retained\n");
+    if (!P.loaded && !P.refresh) kprintf("[GPU] Treiber nicht verfügbar; Firmware-Anzeige bleibt erhalten\n");
 }
 
 static void download_done(http_state_t state) {
@@ -312,13 +313,13 @@ static void download_done(http_state_t state) {
         P.cached_version = version > P.cached_version ? version : P.cached_version;
         if (!engaged()) {
             uint32_t v;
-            if (!load_package(data, size, &v)) kprintf("[GPU] Downloaded package v%u could not be activated\n", version);
+            if (!load_package(data, size, &v)) kprintf("[GPU] Heruntergeladenes Paket v%u konnte nicht aktiviert werden\n", version);
         } else if (P.loaded && version > P.loaded_version) {
-            kprintf("[GPU] Newer package v%u cached; it is used from the next boot\n", version);
+            kprintf("[GPU] Neueres Paket v%u zwischengespeichert; es wird ab dem nächsten Start verwendet\n", version);
         }
         P.finished = true;
     } else {
-        kprintf("[GPU] Download failed or signature rejected (HTTP %d, %u bytes)\n", http_status(P.request), (unsigned)size);
+        kprintf("[GPU] Download fehlgeschlagen oder Signatur abgelehnt (HTTP %d, %u Bytes)\n", http_status(P.request), (unsigned)size);
         http_request_free(P.request);
         P.request = NULL;
         next_mirror_or_finish();
@@ -335,10 +336,10 @@ static void audio_follow(void) {
     uint64_t now = pit_get_ticks();
     if (now < P.audio_next) return;
     P.audio_next = now + 500;
-    if (audio_rescan_hdmi()) { P.audio_done = true; kprintf("[GPU] HDMI audio output active\n"); return; }
+    if (audio_rescan_hdmi()) { P.audio_done = true; kprintf("[GPU] HDMI-Audioausgabe aktiv\n"); return; }
     if (++P.audio_tries >= 20) {
         P.audio_done = true;
-        kprintf("[GPU] HDMI audio endpoint is on but the HD-Audio codec reports no usable sink; analog output retained\n");
+        kprintf("[GPU] HDMI-Audio-Endpunkt ist eingeschaltet, aber der HD-Audio-Codec meldet keine nutzbare Senke; analoge Ausgabe bleibt erhalten\n");
     }
 }
 
@@ -363,8 +364,8 @@ void gpu_packages_poll(void) {
             if (gpu_package_open(cache, size, P.entry->name, P.entry->min_version, &view)) {
                 P.cached_version = view.version;
                 uint32_t v;
-                if (!load_package(cache, size, &v)) kprintf("[GPU] Cached package not usable; downloading\n");
-            } else kprintf("[GPU] Cached package rejected (old format or invalid signature); downloading\n");
+                if (!load_package(cache, size, &v)) kprintf("[GPU] Zwischengespeichertes Paket nicht verwendbar; wird heruntergeladen\n");
+            } else kprintf("[GPU] Zwischengespeichertes Paket abgelehnt (altes Format oder ungültige Signatur); wird heruntergeladen\n");
             kfree(cache);
         }
         /* With a running cached driver the download is only an update check. */
@@ -403,5 +404,5 @@ void gpu_prepare_install(void) {
      * first boot of the installed system. */
     uint64_t end = pit_get_ticks() + 5000;
     do { gpu_packages_poll(); if (P.finished) break; net_poll(); coop_yield_check(); } while (pit_get_ticks() < end);
-    if (P.request) { http_request_free(P.request); P.request = NULL; P.finished = true; kprintf("[GPU] Installer: download deferred until next boot\n"); }
+    if (P.request) { http_request_free(P.request); P.request = NULL; P.finished = true; kprintf("[GPU] Installer: Download auf den nächsten Start verschoben\n"); }
 }

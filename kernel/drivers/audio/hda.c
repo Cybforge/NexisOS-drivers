@@ -503,7 +503,7 @@ bool hda_init(void) {
         H.oss = (gcap >> 12) & 0xF;
         H.iss = (gcap >> 8) & 0xF;
         if (!H.oss) continue;
-        kprintf("[HDA] Controller %04x:%04x, %d Ausgabe-, %d Eingabestroeme\n", dev->vendor_id, dev->device_id, H.oss, H.iss);
+        kprintf("[HDA] Controller %04x:%04x, %d Ausgabe-, %d Eingabeströme\n", dev->vendor_id, dev->device_id, H.oss, H.iss);
         if (!ctrl_reset()) { kprintf("[HDA] Reset fehlgeschlagen\n"); continue; }
         /* codecs announce themselves after the reset */
         uint64_t t0 = pit_get_ticks();
@@ -524,7 +524,7 @@ bool hda_init(void) {
             kprintf("[HDA] %s, %d Ausgabepfad(e), Wandler %d\n", H.name, g_ndac_paths, H.dac);
             return true;
         }
-        kprintf("[HDA] No compatible %s output found\n",H.digital?"HDMI":"analog");
+        kprintf("[HDA] Kein kompatibler Ausgang (%s) gefunden\n",H.digital?"HDMI":"analog");
     }
     }
     retire_controller(); H.mmio = 0;

@@ -134,7 +134,7 @@ bool vmm_init(nexis_boot_info_t *boot_info) {
 
     /* 2. In CR3 schreiben und Page Tables aktivieren */
     write_cr3(pml4_phys);
-    kprintf("[VMM] 4-level paging ready (PML4 at 0x%p, 64 GiB identity map + framebuffer)\n", g_kernel_pml4);
+    kprintf("[VMM] Paging mit 4 Ebenen bereit (PML4 bei 0x%p, 64-GiB-Identitätsabbildung + Framebuffer)\n", g_kernel_pml4);
     return true;
 
 allocation_failed:
