@@ -375,6 +375,15 @@ static void dump_registers(rx6600_state *s){
     dump_one(s,"SMU_ARGUMENT",DCN302_SMU_ARGUMENT_BYTES);dump_one(s,"SMU_RESPONSE",DCN302_SMU_RESPONSE_BYTES);
     dump_one(s,"DFS_PLL",DCN302_DFS_PLL_BYTES);dump_one(s,"DFS_DENTIST",DCN302_DFS_DENTIST_BYTES);dump_one(s,"DFS_DTO_CTRL",DCN302_DFS_DTO_CTRL_BYTES);
     dump_one(s,"HUBBUB_REFCLK_CNTL",DCN302_HUBBUB_REF_BYTES);dump_one(s,"HUBBUB_GLOBAL_TIMER",DCN302_HUBBUB_TIMER_BYTES);
+    for(unsigned p=0;p<5;p++){   /* everything the scan-out surface check reads, so one capture shows which condition fails */
+        uint32_t v[11]={0};bool ok=true;
+        static const uint8_t reg[11]={DCN302_SURFACE_R_OUT_MUX,DCN302_SURFACE_R_TOP,DCN302_SURFACE_R_BOTTOM,DCN302_SURFACE_R_OPP,DCN302_SURFACE_R_MODE,
+            DCN302_SURFACE_R_TILING,DCN302_SURFACE_R_VIEW_START,DCN302_SURFACE_R_VIEW_SIZE,DCN302_SURFACE_R_CROSSBAR,DCN302_SURFACE_R_CONTROL,DCN302_SURFACE_R_BOTTOM};
+        for(unsigned i=0;i<10;i++)if(!dump_read(s,dcn302_surface_register_bytes[p][reg[i]],&v[i]))ok=false;
+        uint32_t src=0;if(!dump_read(s,dcn302_register_bytes[p][DCN302_R_SOURCE],&src))ok=false;
+        nx_logf("rx6600: plane %u%s: OPP-mux %08x | MPCC top %08x bottom %08x opp %08x mode %08x | HUBP tiling %08x vstart %08x vsize %08x xbar %08x ctrl %08x | OTG source %08x",
+            p,ok?"":" (some reads failed)",v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7],v[8],v[9],src);
+    }
     for(unsigned p=0;p<5;p++){
         uint32_t be=0,en=0,fe=0,hpd=0;bool ok=true;
         if(!dump_read(s,dcn302_hdmi_register_bytes[p][DCN302_HDMI_R_BE],&be))ok=false;

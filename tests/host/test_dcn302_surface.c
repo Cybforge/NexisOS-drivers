@@ -60,7 +60,7 @@ static void invalid(void){
         switch(kind){
             case 0:m.regs[0][DCN302_SURFACE_R_OUT_MUX]=15;break;
             case 1:m.regs[2][DCN302_SURFACE_R_TOP]=15;break;case 2:m.regs[2][DCN302_SURFACE_R_BOTTOM]=2;break;
-            case 3:m.regs[2][DCN302_SURFACE_R_OPP]=1;break;case 4:m.regs[2][DCN302_SURFACE_R_MODE]=3;break;
+            case 3:m.regs[2][DCN302_SURFACE_R_OPP]=1;break;case 4:m.regs[2][DCN302_SURFACE_R_MODE]=0;break;   /* bypass */
             case 5:h[DCN302_SURFACE_R_CONFIG]=10;break;case 6:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ROTATION_MASK;break;
             case 7:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_MIRROR_MASK;break;case 8:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ALPHA_MASK;break;
             case 9:h[DCN302_SURFACE_R_TILING]=1;break;case 10:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_BLANK_MASK;break;
@@ -74,7 +74,13 @@ static void invalid(void){
             case 25:h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x0fc00000;break;
             case 26:m.top=m.base;h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x1000000;break;
         }
+        if(kind==21){   /* another R/G/B crossbar mapping is not a different surface (this module never rewrites it) */
+            CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;continue;
+        }
         memset(&s,0xa5,sizeof(s));CHECK(bind(&m,&io,&r,1,&s)!=DCN302_SURFACE_OK && !memcmp(&s,&zero,sizeof(s)));cases++;
+    }
+    for(unsigned mode=1;mode<=3;mode++){   /* MPCC passthrough / top only / blending with no bottom layer: all show the plane as is */
+        init(&m,&io,&r,0,2,4,1);m.regs[2][DCN302_SURFACE_R_MODE]=mode;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
     }
     init(&m,&io,&r,0,2,4,1);
     CHECK(dcn302_surface_bind(&io,&r,UINT64_MAX-1,bar_bytes,gop,gop_bytes,2048,1,&s)==DCN302_SURFACE_INPUT);cases++;

@@ -19,7 +19,7 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
     unsigned hubp=GET(top,TOP);
     /* Navi23 resources pair HUBP[i] with DPP[i]; MPCC TOP selects this DPP.
      * Reject additional blending layers, self-referential trees and bypass. */
-    if(hubp>=5 || GET(bottom,BOTTOM)!=15 || GET(opp,OPP)!=route->opp || (GET(mode,MODE)!=1 && GET(mode,MODE)!=2))return DCN302_SURFACE_UNSUPPORTED;
+    if(hubp>=5 || GET(bottom,BOTTOM)!=15 || GET(opp,OPP)!=route->opp || GET(mode,MODE)==0)return DCN302_SURFACE_UNSUPPORTED;   /* any non-bypass MPCC mode: with BOT_SEL = none the plane is shown as is (1 passthrough, 2 top only, 3 blending) */
     uint32_t regs[DCN302_SURFACE_REGISTER_COUNT]={0};
     for(unsigned r=DCN302_SURFACE_R_CONFIG;r<DCN302_SURFACE_REGISTER_COUNT;r++)if(!rd(io,hubp,(enum dcn302_surface_register)r,&regs[r]))return DCN302_SURFACE_IO;
     uint32_t c=regs[DCN302_SURFACE_R_CONFIG],clock=regs[DCN302_SURFACE_R_CLOCK],ctl=regs[DCN302_SURFACE_R_HUBP];
@@ -31,8 +31,8 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
        (GET(regs[DCN302_SURFACE_R_PITCH],PITCH)+1!=pitch && GET(regs[DCN302_SURFACE_R_PITCH],PITCH)!=pitch))return DCN302_SURFACE_UNSUPPORTED;
     /* Linux (dcn20_hubp.c hubp2_program_size) writes PITCH = surface_pitch - 1, but the RX 6600's GOP left PITCH = 0x780 = 1920
      * for its 1920-pixel desktop: accept both encodings of the firmware's pitch (this module never rewrites PITCH). */
-    uint32_t crossbar=regs[DCN302_SURFACE_R_CROSSBAR];
-    if(GET(crossbar,GREEN)!=1 || GET(crossbar,RED)!=(format?3u:2u) || GET(crossbar,BLUE)!=(format?2u:3u))return DCN302_SURFACE_UNSUPPORTED;
+    /* The component crossbar only says how the firmware maps R/G/B; this module never rewrites it, so a different mapping can at
+     * worst swap colours in the kernel's own drawing, it cannot make the scan-out surface a different one. Not a reason to give up. */
     uint64_t addr=((uint64_t)GET(regs[DCN302_SURFACE_R_ADDRESS_HIGH],HIGH)<<32)|regs[DCN302_SURFACE_R_ADDRESS];
     uint64_t actual=((uint64_t)GET(regs[DCN302_SURFACE_R_INUSE_HIGH],INUSE_HIGH)<<32)|regs[DCN302_SURFACE_R_INUSE];
     if(addr!=actual)return DCN302_SURFACE_CHANGED;

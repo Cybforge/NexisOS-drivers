@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v6 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v7 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,18 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Sechster Hardwarelauf (2026-10-15) und Paket v7: Oberflächen-Prüfung
+
+Mit v6 kam die Probe (echte BIOS-Tabellen) bis zu „scan-out surface does not match the desktop framebuffer (code 3)“ =
+`DCN302_SURFACE_UNSUPPORTED`. Welche der Teilbedingungen greift, steht nicht im Log (nicht alle Register waren im Abzug). Daher in v7:
+
+* Abzug nach jedem Abbruch erweitert: je Ebene OPP-Mux, MPCC (top/bottom/opp/mode), HUBP (tiling, viewport start/size, crossbar,
+  control) und OTG-Source. Aus einer Aufnahme lässt sich die verletzte Bedingung ablesen.
+* Entschärft (jeweils begründet): der R/G/B-Crossbar wird nicht mehr verlangt (das Modul schreibt ihn nie; höchstens vertauschte
+  Farben), MPCC-Modus 1/2/3 (Durchreichen/nur oben/Mischen) statt nur 1/2 (kein unterer Layer ist durch BOT_SEL geprüft).
+* Weiterhin gefordert (wesentlich für „dieselbe Fläche wie der Desktop“): Format ARGB8888, linear (SW_MODE 0), kein DCC/TMZ, kein
+  Rotieren/Spiegeln, Viewport = 1920×1080 ab (0,0), Pitch, Adresse im VRAM-Fenster und gleich der GOP-Framebuffer-Adresse.
 
 ## Fünfter Hardwarelauf (2026-10-15) und Paket v6: erstmals mit den echten BIOS-Tabellen getestet
 
