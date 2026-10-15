@@ -11,4 +11,6 @@ void gpu_runtime_poll(void);
 bool gpu_runtime_active(void);
 /* The running native mode sends HDMI audio packets (the module's audio endpoint is on). */
 bool gpu_runtime_audio(void);
+/* Name of the running native module ("AMD Radeon RX 6600 (native HDMI)"), or NULL when the firmware framebuffer is in use. */
+const char *gpu_runtime_name(void);
 #endif

@@ -124,6 +124,35 @@ braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert �
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
 
+## Achter Hardwarelauf (2026-10-15) und Paket v9: die Power-Management-Firmware antwortet nicht
+
+Mit v8 kam die Probe bis „power-management (SMU) mailbox (error 4, test reply 0x0, version 0x0, last response 0x0)“: Der DAL-Mailbox
+(`0x1628A/0x16273/0x16274`, Linux `dcn30_clk_mgr_smu_msg.c`) antwortet auf **keine** Nachricht, auch nicht auf die allererste. Eine nur vom
+Video-BIOS gestartete Karte hat vom Betriebssystem noch keine SMU-Initialisierung bekommen. Linux setzt in diesem Fall `smu_present = false`
+(`dcn30_clk_mgr.c`: nur wenn `GetSmuVersion` klappt) und **überspringt jede Taktverwaltung**. v9 macht dasselbe:
+
+* **Neuer Zustand „absent“** (`dcn302_smu.absent`): bleibt die erste Nachricht über das volle Fenster unbeantwortet (Antwortregister immer 0), ist
+  das kein Protokollfehler mehr, sondern „niemand hört zu“. Danach wird **nie wieder** etwas an diese Mailbox gesendet.
+* **Display-Takte bleiben, wie das BIOS sie ließ** (DISPCLK/DPPCLK ≈ 165,9 MHz). Der Treiber hebt sie nicht an, weil ohne SMU keine Spannung
+  angehoben werden kann. Der Plan akzeptiert nur, was diese Takte tragen (das Bandbreitenmodell entscheidet).
+* **Speicher-/Fabric-/PHY-Takt sind nicht lesbar.** Das Modell bekommt die niedrigsten plausiblen Stufen als Platzhalter (SOC 400, Speicher 96,
+  DCF 400, PHY 300 MHz, `RX6600_ASSUMED_*` in `rx6600.h`): mehr Latenz, größere Watermarks – die sichere Richtung. Das sind **Annahmen, keine
+  Messwerte**; das Log nennt sie.
+* **Das Kernel-Limit für den Pixeltakt** (`max_pixel_khz`) sinkt in diesem Zustand auf das, was DISPCLK trägt (ca. 158 MHz, mindestens der
+  laufende Modus). Dadurch wählt der Kernel keinen Modus, den die festen Takte nicht schaffen: **240 Hz geht ohne SMU nicht**, es bleibt 1080p60.
+* **Ein unveränderter Modus läuft jetzt trotzdem einmal durch die native Sequenz**, wenn der Monitor Ton kann und noch keine Audio-Einrichtung
+  stattfand (`rx6600_set_mode`): das ist der erste echte Test von Sequenz, Rückfall und HDMI-Audio auf der Karte.
+* **Diagnose für die nächste Aufnahme:** Das Log nennt „power management: the SMU does not answer the DAL mailbox …; PMFW driver mailbox
+  answers / is silent too (version …)“. Dafür wird die zweite PMFW-Mailbox (amdgpu „swsmu“, C2PMSG_66/82/90) einmal mit `GetSmuVersion`
+  (nur lesen) gefragt. Der Registerabzug bei Fehlern enthält jetzt auch MSG/ARG/RESP beider Mailboxen und MP1_C2PMSG_35/81.
+
+Getestet nur im Host-Modell (`dead_smu()` in `test_rx6600.c`, `real_card(true)` in `test_rx6600_modeset.c`, neue Fälle in `test_dcn302_smu.c`):
+Probe klappt, kein weiterer Mailbox-Zugriff, 1080p60 geht mit Platzhaltertakten durch das Bandbreitenmodell, die Sequenz läuft einmal mit
+Audio, 240 Hz wird im Plan abgelehnt, bevor der Bildschirm dunkel wird. **Nicht auf der echten Karte geprüft.** Offen bleibt, **warum** die SMU nicht
+antwortet (Adressen sind gegen Linux geprüft; vermutlich bedient die Firmware den DAL-Kanal erst nach der Treiber-Initialisierung der swsmu-Seite)
+und wie 240 Hz ohne SMU-Spannungsanhebung erreichbar wäre. Die nächste Aufnahme zeigt außerdem erstmals, ob die Sequenz ab „plan“ auf echter
+Hardware läuft.
+
 ## Siebter Hardwarelauf (2026-10-15) und Paket v8: die echten Ebenen-Register
 
 Der erweiterte Abzug von v7 zeigte die echten Werte: für die aktive Ebene 0 steht `MPCC_BOT_SEL` auf **0** (jeder ungenutzte MPCC i hat

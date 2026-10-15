@@ -8,7 +8,7 @@ typedef struct {
     uint32_t response,argument,last_argument,last_response,command,parameter,version,interface,header,status,forced_floor;
     uint32_t features[13],floor[13];uint16_t frequencies[13][32];
     uint64_t time,due;unsigned latency,ops,fail,ignore,triggers,writes,rollback_writes;
-    bool pending,post_failure,frozen,backwards,wrong_test,invalid;
+    bool pending,post_failure,frozen,backwards,wrong_test,invalid,alt;uint32_t scratch[3];
     dcn302_smu *reentry;bool reentered;
     uint32_t messages[1024],parameters[1024];
 } model;
@@ -25,8 +25,19 @@ static void complete(model *m){
     }
     m->argument=out;m->response=m->status;m->last_argument=out;m->last_response=m->status;m->pending=false;
 }
+/* The mailbox answers at one of two register sets (DCN302_SMU_* or DCN302_SMU_ALT_*); the other set exists but nobody services it. */
+static bool is_alt(uint32_t a){return a==DCN302_SMU_ALT_MESSAGE_BYTES || a==DCN302_SMU_ALT_ARGUMENT_BYTES || a==DCN302_SMU_ALT_RESPONSE_BYTES;}
+static bool is_base(uint32_t a){return a==DCN302_SMU_MESSAGE_BYTES || a==DCN302_SMU_ARGUMENT_BYTES || a==DCN302_SMU_RESPONSE_BYTES;}
+static bool silent(const model *m,uint32_t a){return m->alt?is_base(a):is_alt(a);}
+static unsigned slot(uint32_t a){return a==DCN302_SMU_MESSAGE_BYTES||a==DCN302_SMU_ALT_MESSAGE_BYTES?0:a==DCN302_SMU_ARGUMENT_BYTES||a==DCN302_SMU_ALT_ARGUMENT_BYTES?1:2;}
+static uint32_t mapped(const model *m,uint32_t a){
+    if(!m->alt || !is_alt(a))return a;
+    return a==DCN302_SMU_ALT_MESSAGE_BYTES?DCN302_SMU_MESSAGE_BYTES:a==DCN302_SMU_ALT_ARGUMENT_BYTES?DCN302_SMU_ARGUMENT_BYTES:DCN302_SMU_RESPONSE_BYTES;
+}
 static bool rd(void *ctx,uint32_t address,uint32_t *out){
     model *m=ctx;if(++m->ops==m->fail)return false;
+    if(silent(m,address)){*out=m->scratch[slot(address)];return true;}
+    address=mapped(m,address);
     if(address==DCN302_SMU_RESPONSE_BYTES){if(m->pending && m->time>=m->due)complete(m);*out=m->response;return true;}
     if(address==DCN302_SMU_ARGUMENT_BYTES){*out=m->argument;return true;}
     m->invalid=true;return false;
@@ -34,6 +45,8 @@ static bool rd(void *ctx,uint32_t address,uint32_t *out){
 static bool wr(void *ctx,uint32_t address,uint32_t value){
     model *m=ctx;unsigned op=++m->ops;m->writes++;
     if(op==m->fail && !m->post_failure)return false;
+    if(silent(m,address)){m->scratch[slot(address)]=value;return op!=m->fail;}
+    address=mapped(m,address);
     if(op!=m->ignore){
         if(address==DCN302_SMU_RESPONSE_BYTES){CHECK(!m->pending);m->response=value;if(value)m->rollback_writes++;}
         else if(address==DCN302_SMU_ARGUMENT_BYTES){CHECK(!m->pending);m->argument=value;}
@@ -175,7 +188,11 @@ static void fault_transactions(void){
         CHECK(m.ops==ops && !m.triggers && !m.invalid);   /* not one register access reached the mailbox */
         cases++;
     }
-    io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,96));cases++;   /* a working mailbox never takes stand-ins */
+    io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && s.mailbox_set==0 && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,96));cases++;
+    /* The Navi23 register set (MP1 aperture 0x16200): the Navi21 addresses stay silent, the second candidate answers and is used from then on. */
+    io=init(&m);m.alt=true;CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && s.mailbox_set==1 && s.version==0x3a0100 && m.triggers==4 && !s.poisoned);
+    CHECK(s.message_bytes==DCN302_SMU_ALT_MESSAGE_BYTES && s.argument_bytes==DCN302_SMU_ALT_ARGUMENT_BYTES && s.response_bytes==DCN302_SMU_ALT_RESPONSE_BYTES);
+    {dcn302_smu_limits l;uint32_t got;CHECK(dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&l) && l.count==3 && dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,558,&got) && got==558);}cases++;   /* a working mailbox never takes stand-ins */
     io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&limits));unsigned before=m.ops;
     uint32_t actual;CHECK(dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,558,&actual));operations=m.ops-before;
     for(unsigned post=0;post<2;post++)for(unsigned fault=1;fault<=operations;fault++){

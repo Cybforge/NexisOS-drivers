@@ -147,19 +147,48 @@ bool edid_parse(const uint8_t *b,size_t size,edid_monitor *m){
     }
     m->valid=true;return true;
 }
+static bool usable_rgb8(const edid_monitor *m,const edid_timing *t,uint32_t width,uint32_t height,const edid_link_limits *link){
+    if(t->hactive!=width || t->vactive!=height || t->clock_khz>link->max_pixel_khz || t->flags&(EDID_INTERLACE|EDID_DOUBLE_CLOCK|EDID_Y420_ONLY))return false;
+    if(link->hdmi){
+        unsigned sink_clock=m->max_tmds_khz?m->max_tmds_khz:165000;
+        if(!link->max_tmds_khz || t->clock_khz>link->max_tmds_khz || t->clock_khz>sink_clock)return false;
+        if(t->clock_khz>340000 && !(m->scdc && link->scdc))return false;
+    }
+    return true;
+}
+static bool better(const edid_timing *a,const edid_timing *b){   /* higher refresh first; equal refresh: lower pixel clock */
+    uint32_t ra=edid_refresh_millihz(a),rb=edid_refresh_millihz(b);
+    return ra>rb || (ra==rb && a->clock_khz<b->clock_khz);
+}
 const edid_timing *edid_select_rgb8(const edid_monitor *m,uint32_t width,uint32_t height,const edid_link_limits *link){
     if(!m || !m->valid || !m->digital || !link || !link->max_pixel_khz || !width || !height)return NULL;
     const edid_timing *best=NULL;
     for(unsigned i=0;i<m->count;i++){
         const edid_timing *t=&m->modes[i];
-        if(t->hactive!=width || t->vactive!=height || t->clock_khz>link->max_pixel_khz || t->flags&(EDID_INTERLACE|EDID_DOUBLE_CLOCK|EDID_Y420_ONLY))continue;
-        if(link->hdmi){
-            unsigned sink_clock=m->max_tmds_khz?m->max_tmds_khz:165000;
-            if(!link->max_tmds_khz || t->clock_khz>link->max_tmds_khz || t->clock_khz>sink_clock)continue;
-            if(t->clock_khz>340000 && !(m->scdc && link->scdc))continue;
-        }
-        if(!best || edid_refresh_millihz(t)>edid_refresh_millihz(best) ||
-           (edid_refresh_millihz(t)==edid_refresh_millihz(best) && t->clock_khz<best->clock_khz))best=t;
+        if(!usable_rgb8(m,t,width,height,link))continue;
+        if(!best || better(t,best))best=t;
     }
     return best;
+}
+/* All usable timings, best first, one per distinct refresh rate (within 0.5 Hz): the caller tries them in order. */
+unsigned edid_candidates_rgb8(const edid_monitor *m,uint32_t width,uint32_t height,const edid_link_limits *link,const edid_timing **out,unsigned max){
+    if(!m || !m->valid || !m->digital || !link || !link->max_pixel_khz || !width || !height || !out || !max)return 0;
+    unsigned count=0;
+    for(unsigned i=0;i<m->count;i++){
+        const edid_timing *t=&m->modes[i];
+        if(!usable_rgb8(m,t,width,height,link))continue;
+        bool duplicate=false;
+        for(unsigned k=0;k<count;k++){
+            uint32_t a=edid_refresh_millihz(t),b=edid_refresh_millihz(out[k]);
+            if((a>b?a-b:b-a)<500){if(better(t,out[k]))out[k]=t;duplicate=true;break;}
+        }
+        if(duplicate)continue;
+        unsigned at=count<max?count:max;
+        if(count<max)count++;
+        else if(!better(t,out[max-1]))continue;
+        else at=max-1;
+        out[at]=t;
+        while(at>0 && better(out[at],out[at-1])){const edid_timing *x=out[at];out[at]=out[at-1];out[at-1]=x;at--;}
+    }
+    return count;
 }

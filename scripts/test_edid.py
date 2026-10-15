@@ -60,6 +60,18 @@ assert m.manufacturer==b'ACR' and 239900<=hz(select(m))<=240100
 assert hz(select(m,scdc=False))==120000 and hz(select(m,pixel=165000))==60000
 assert hz(select(m,tmds=165000))==60000 and select(m,pixel=0) is None
 assert select(m,width=2560,height=1440) is None
+# candidate list: best first, one per refresh rate, same filters as select()
+lib.edid_candidates_rgb8.argtypes=[c.POINTER(Monitor),c.c_uint32,c.c_uint32,c.POINTER(Limits),c.POINTER(c.POINTER(Timing)),c.c_uint]
+lib.edid_candidates_rgb8.restype=c.c_uint
+def candidates(m,maximum=3,width=1920,height=1080,pixel=600000,tmds=600000,hdmi=True,scdc=True):
+    limits=Limits(pixel,tmds,hdmi,scdc);out=(c.POINTER(Timing)*8)()
+    n=lib.edid_candidates_rgb8(c.byref(m),width,height,c.byref(limits),out,maximum);assert n<=maximum
+    return [hz(out[i].contents) for i in range(n)]
+all_modes=candidates(m,8);assert all_modes==sorted(all_modes,reverse=True) and len(set(round(x/1000) for x in all_modes))==len(all_modes)
+assert 239900<=all_modes[0]<=240100 and 60000 in all_modes and all_modes[0]==hz(select(m))
+assert candidates(m,1)==all_modes[:1] and len(candidates(m,2))==2 and candidates(m,0)==[]
+assert candidates(m,8,pixel=165000)==[60000] and all(x<200000 for x in candidates(m,8,scdc=False))
+assert candidates(m,8,width=2560,height=1440)==[] and candidates(m,8,pixel=0)==[]
 assert hz(select(m,tmds=0,hdmi=False))>239900
 for position in [0,7,18,54,127,128,200,255]:
     bad=bytearray(raw);bad[position]^=1;parse(bad,False)

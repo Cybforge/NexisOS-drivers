@@ -20,7 +20,7 @@ typedef struct {
     uint32_t firmware_regs[4];unsigned firmware_reads,firmware_writes;
     unsigned firmware_read_loss,time_fault,delays,fail_delay;
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
-    bool smu_dead;unsigned pmfw_writes;uint32_t pmfw[3];
+    bool smu_dead,smu_alt;unsigned silent_writes;uint32_t scratch[16];uint8_t edid[128];
     uint64_t time;unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
     unsigned fail_mmio_write,ignore_mmio_write,activate_mmio_write,hubbub_writes,hubp_writes,timing_writes,dpp_writes,loss_mmio_write,loss_kind;
     bool posted;
@@ -58,8 +58,32 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
     b[1642]=5;b[1644]=6;b[1645]=6;b[1646]=6;
     unsigned sum=0;for(unsigned n=0;n<2047;n++)sum+=b[n];b[2047]=(uint8_t)(0-sum);
 }
+/* Mailbox registers nobody services (the other candidate set, both PMFW driver mailboxes, MP1 status words): reads 0, writes vanish. With
+ * smu_alt the DAL mailbox answers at the Navi23 set (0x200 dwords higher) and the Navi21 set is silent; otherwise the other way round. */
+static int smu_silent(const model *m,uint32_t offset){   /* scratch slot of a silent register, or -1 */
+    const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
+    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
+    for(unsigned n=0;n<3;n++){if(m->smu_alt && offset==base[n])return (int)n;if(!m->smu_alt && offset==alt[n])return 3+(int)n;}
+    for(unsigned set=0;set<2;set++){
+        if(offset==DCN302_PMFW_MESSAGE_BYTES(set))return 6+(int)set*3;
+        if(offset==DCN302_PMFW_ARGUMENT_BYTES(set))return 7+(int)set*3;
+        if(offset==DCN302_PMFW_RESPONSE_BYTES(set))return 8+(int)set*3;
+    }
+    if(offset==(0x16000u+0x263u)*4u)return 12;
+    if(offset==(0x16000u+0x291u)*4u)return 13;
+    return -1;
+}
+static uint32_t smu_map(const model *m,uint32_t offset){
+    const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
+    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
+    if(m->smu_alt)for(unsigned n=0;n<3;n++)if(offset==alt[n])return base[n];
+    return offset;
+}
 static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *out){
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
+    {int slot=smu_silent(m,offset);if(slot>=0){*out=m->scratch[slot];return true;}}
+    offset=smu_map(m,offset);
+    if(offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}
     const uint32_t firmware_bytes[]={0,4,0x8000,0x8004};
     for(unsigned n=0;n<4;n++)if(offset==firmware_bytes[n]){
         *out=m->firmware_regs[n];m->firmware_reads++;
@@ -68,10 +92,6 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
         return true;
     }
     if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
-    if(offset==DCN302_PMFW_MESSAGE_BYTES || offset==DCN302_PMFW_ARGUMENT_BYTES || offset==DCN302_PMFW_RESPONSE_BYTES){   /* other PMFW mailbox: silent */
-        *out=offset==DCN302_PMFW_MESSAGE_BYTES?m->pmfw[0]:offset==DCN302_PMFW_ARGUMENT_BYTES?m->pmfw[1]:m->pmfw[2];return true;
-    }
-    if(offset==(0x16000u+0x263u)*4u || offset==(0x16000u+0x291u)*4u || offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}   /* diagnostic dump only */
     if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
     if(offset==DCN302_HUBBUB_REF_BYTES){*out=m->reference;return true;}
     if(offset==DCN302_HUBBUB_TIMER_BYTES){*out=m->timer;return true;}
@@ -96,10 +116,9 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
 }
 static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
     model *m=ctx;CHECK(bar==5);
+    {int slot=smu_silent(m,offset);if(slot>=0){m->scratch[slot]=value;m->silent_writes++;return true;}}
+    offset=smu_map(m,offset);
     if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
-    if(offset==DCN302_PMFW_MESSAGE_BYTES){m->pmfw_writes++;m->pmfw[0]=value;return true;}
-    if(offset==DCN302_PMFW_ARGUMENT_BYTES){m->pmfw_writes++;m->pmfw[1]=value;return true;}
-    if(offset==DCN302_PMFW_RESPONSE_BYTES){m->pmfw_writes++;m->pmfw[2]=value;return true;}
     if(offset==DCN302_SMU_ARGUMENT_BYTES){m->smu_writes++;m->smu_argument=value;return true;}
     if(offset==DCN302_SMU_MESSAGE_BYTES){
         m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);if(m->smu_dead)return true;   /* nobody listens: response stays 0 */
@@ -206,6 +225,11 @@ static bool NEXIS_GPU_CALL delay(void *ctx,uint32_t us){
     return true;
 }
 static uint64_t NEXIS_GPU_CALL now(void *ctx){return ((model *)ctx)->time;}
+/* A base EDID block without CEA extension (so: no audio descriptor): the kernel-side EDID of these tests. */
+static void base_edid(uint8_t *e){
+    memset(e,0,128);static const uint8_t header[8]={0,255,255,255,255,255,255,0};memcpy(e,header,8);e[8]=0x04;e[9]=0x72;e[18]=1;e[19]=4;
+    unsigned sum=0;for(unsigned i=0;i<127;i++)sum+=e[i];e[127]=(uint8_t)(0-sum);
+}
 static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,unsigned pipe,unsigned bus,unsigned hpd,unsigned opp,unsigned mpcc,unsigned hubp,unsigned format){
     memset(m,0,sizeof(*m));memset(k,0,sizeof(*k));rom_init(m,link,bus,hpd);m->period=4166;
     m->timer=0x1002;
@@ -214,6 +238,7 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
     *k=(nexis_gpu_services){.abi=2,.size=136,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
         .framebuffer=0x800200000ULL,.framebuffer_bytes=2048u*4*1080,.rom=m->rom,.rom_bytes=2048,.service_context=m,
         .read32=rd,.write32=wr,.time_us=now,.delay_us=delay,.resource=resource,.log=tlog};
+    base_edid(m->edid);k->edid=m->edid;k->edid_bytes=128;
     m->vram=(nexis_gpu_resource){0x800000000ULL,0x200000000ULL,7,0};m->registers=(nexis_gpu_resource){0xb0000000,0x100000,9,0};
     m->hpd[hpd]=DCN302_HPD_SENSE_MASK|DCN302_HPD_DELAYED_MASK;
     m->dig[link][DCN302_HDMI_R_BE]=HSET(HSET(HSET(0,LINK_MODE,3),FE_SOURCE,1u<<stream),HPD,hpd);
@@ -369,13 +394,24 @@ static void real_card(void){
 }
 /* The second real-card run: the power-management firmware never answers the DAL mailbox. Linux then runs without clock management
  * (smu_present=false); the driver must do the same, never touch that mailbox again, and still plan with the clocks the BIOS left. */
+/* The RX 6600's DAL mailbox answers at the Navi23 register set (MP1 aperture 0x16200): the probe finds it and runs the normal SMU path. */
+static void navi23_mailbox(void){
+    model m;nexis_gpu_services k;rx6600_state s;
+    real_card_init(&m,&k);m.smu_alt=true;m.smu_status=m.smu_response=1;m.smu_version=0x3a0100;m.smu_header=1;m.smu_interface=0x40;m.smu_features=3;
+    enum rx6600_error e=rx6600_probe(&s,&k);
+    if(e)fprintf(stderr,"navi23-mailbox probe error %u\n",(unsigned)e);
+    CHECK(e==RX6600_OK && s.ready && s.smu.ready && !s.smu.absent && s.smu.mailbox_set==1 && s.smu.version==0x3a0100 && !m.writes && !m.invalid);
+    CHECK(s.smu.clocks[DCN302_SMU_UCLK].valid && s.smu.clocks[DCN302_SMU_DISPCLK].valid && s.smu.clocks[DCN302_SMU_PHYCLK].valid);
+    CHECK(rx6600_max_pixel_khz(&s)==s.route.max_tmds_khz);   /* real clock control: the connector limit applies */
+    rx6600_shutdown(&s);cases++;
+}
 static void dead_smu(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
     real_card_init(&m,&k);m.smu_dead=true;
     enum rx6600_error e=rx6600_probe(&s,&k);
     if(e)fprintf(stderr,"dead-SMU probe error %u\n",(unsigned)e);
     CHECK(e==RX6600_OK && s.ready && s.smu.absent && !s.smu.ready && dcn302_smu_usable(&s.smu) && !m.writes && !m.invalid);
-    CHECK(m.smu_triggers==1 && m.pmfw_writes==3);   /* one unanswered test message, one read-only PMFW version query */
+    CHECK(m.smu_triggers==1 && m.silent_writes==9);   /* one unanswered test message per register set (the second set is silent), then a read-only version query on each PMFW driver mailbox */
     CHECK(s.smu.floor_known[DCN302_SMU_DISPCLK] && s.smu.floor_mhz[DCN302_SMU_DISPCLK]==s.dfs.disp_floor_mhz && s.smu.floor_mhz[DCN302_SMU_DPPCLK]==s.dfs.dpp_floor_mhz);
     CHECK(s.smu.floor_mhz[DCN302_SMU_UCLK]==RX6600_ASSUMED_UCLK_MHZ && s.smu.floor_mhz[DCN302_SMU_SOCCLK]==RX6600_ASSUMED_SOCCLK_MHZ &&
           s.smu.floor_mhz[DCN302_SMU_DCEFCLK]==RX6600_ASSUMED_DCEFCLK_MHZ && s.smu.floor_mhz[DCN302_SMU_PHYCLK]==RX6600_ASSUMED_PHYCLK_MHZ);
@@ -975,5 +1011,5 @@ static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsig
     for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==12);real_card();dead_smu();normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
+int main(int argc,char **argv){CHECK(argc==12);real_card();navi23_mailbox();dead_smu();normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
     printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"real_pic_bandwidth_plan_executed\":true,\"atom_memory_topology_integrated\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

@@ -91,6 +91,9 @@ typedef struct {
     bool sequence_proven; /* the full sequence already ran once for the current mode (self-test) */
     bool audio_active;  /* AFMT audio packets are being sent (reported as NEXIS_GPU_SCANOUT_AUDIO) */
     bool audio_tried;   /* the full sequence (which sets HDMI audio up) already ran once; an unchanged mode is then not redone */
+    bool selftest_failed; /* the native sequence failed once for the CURRENT mode: it does not work on this board, never try again */
+    /* Monitor EDID read over DDC when the firmware handed none to the kernel (edid_source 2); otherwise the kernel's copy is used (source 1). */
+    uint8_t edid[256];unsigned edid_bytes;uint8_t edid_source;
     uint32_t modeset_count;
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
@@ -139,6 +142,10 @@ bool rx6600_is_running_mode(const rx6600_state *,const nexis_gpu_timing *);
 /* Highest pixel clock the kernel may ask for. Normally the connector limit; without power management (smu.absent) only what
  * the display clocks the video BIOS left can carry (never below the mode that runs now). */
 uint32_t rx6600_max_pixel_khz(const rx6600_state *);
+/* The monitor EDID the driver uses (kernel's or its own DDC copy); NULL/0 when there is none. */
+const uint8_t *rx6600_edid(const rx6600_state *,unsigned *bytes);
+/* Read the monitor EDID over DDC when neither the kernel nor an earlier read provided one (probe does this once). */
+void rx6600_edid_from_ddc(rx6600_state *);
 bool rx6600_set_mode(rx6600_state *,const nexis_gpu_timing *);
 void rx6600_poll(rx6600_state *);
 void rx6600_shutdown(rx6600_state *);

@@ -195,10 +195,11 @@ static bool step_plan_resync(void *c) {
 static bool step_plan_audio(void *c) {
     ms *m = c;
     rx6600_state *s = m->s;
-    const nexis_gpu_services *k = s->services;
     m->audio = false;
     nx_audio_caps caps;
-    if (!nx_audio_caps_from_edid(k->edid, k->edid_bytes, &caps) || !nx_audio_caps_stereo48(&caps)) {
+    unsigned edid_bytes;
+    const uint8_t *edid = rx6600_edid(s, &edid_bytes);
+    if (!edid || !nx_audio_caps_from_edid(edid, edid_bytes, &caps) || !nx_audio_caps_stereo48(&caps)) {
         nx_logf("rx6600: no usable HDMI audio descriptor in the monitor EDID: video only");
         return true;
     }
@@ -540,12 +541,13 @@ bool rx6600_modeset(rx6600_state *s, const nexis_gpu_timing *target) {
     /* Reject impossible requests before anything is touched - including the self-test below. */
     if (target->hactive != s->route.shape.hactive || target->vactive != s->route.shape.vactive) { nx_logf("rx6600: resolution changes are not supported"); return false; }
     if (target->pixel_khz < 25000 || target->pixel_khz > s->route.max_tmds_khz) { nx_logf("rx6600: %u kHz outside the connector range 25000..%u", target->pixel_khz, s->route.max_tmds_khz); return false; }
+    if (s->selftest_failed) { nx_logf("rx6600: the native sequence already failed for the current mode: not tried again"); return false; }
     const bool unchanged = rx6600_is_running_mode(s, target);
     if (!s->sequence_proven) {
         nexis_gpu_timing same = s->route.shape;
         same.pixel_khz = s->clock.pixel_khz;
         nx_logf("rx6600: self-test: running the full native sequence once for the CURRENT mode first");
-        if (!modeset_once(s, &same)) return false;
+        if (!modeset_once(s, &same)) { s->selftest_failed = true; return false; }
         s->sequence_proven = true;
         s->audio_tried = true;
         if (unchanged) return true; /* the self-test already ran the requested (current) mode, audio included */

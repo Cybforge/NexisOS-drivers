@@ -28,13 +28,14 @@ static bool error(dcn302_smu *s,enum dcn302_smu_error e,bool poison){s->error=e;
  * so a timeout there is "idle mailbox", not an error, and not a reason to poison it. */
 static bool wait_response(dcn302_smu *s,uint32_t *response,bool soft){
     uint64_t start=s->time_us(s->io.context),last=start;
-    const unsigned limit=soft?2000u:200000u;const uint64_t window=soft?20000u:2000000u;
+    /* While probing for the right register set, a mailbox that exists answers within microseconds: 250 ms is plenty. */
+    const unsigned limit=soft?2000u:s->probing?25000u:200000u;const uint64_t window=soft?20000u:s->probing?250000u:2000000u;
     for(unsigned n=0;n<=limit;n++){
         uint64_t now=s->time_us(s->io.context);
         if(now<last)return error(s,DCN302_SMU_PROTOCOL,true);
         if(now-start>window){if(soft){*response=0;return true;}return error(s,DCN302_SMU_TIMEOUT,true);}
         last=now;
-        if(!s->io.read(s->io.context,DCN302_SMU_RESPONSE_BYTES,response))return error(s,DCN302_SMU_IO,true);
+        if(!s->io.read(s->io.context,s->response_bytes,response))return error(s,DCN302_SMU_IO,true);
         if(*response)return true;
         if(n==limit){if(soft){*response=0;return true;}return error(s,DCN302_SMU_TIMEOUT,true);}
         if(!s->io.delay_us(s->io.context,10))return error(s,DCN302_SMU_IO,true);
@@ -55,10 +56,10 @@ static bool response_status(dcn302_smu *s,uint32_t r){
 static bool restore_untriggered(dcn302_smu *s,uint32_t argument,uint32_t response){
     /* Never rewrite the message register: that would replay a command. Before
      * our trigger only the argument/response data registers were changed. */
-    uint32_t v;bool ok=s->io.write(s->io.context,DCN302_SMU_ARGUMENT_BYTES,argument);
-    if(!s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,&v) || v!=argument)ok=false;
-    if(!s->io.write(s->io.context,DCN302_SMU_RESPONSE_BYTES,response))ok=false;
-    if(!s->io.read(s->io.context,DCN302_SMU_RESPONSE_BYTES,&v) || v!=response)ok=false;
+    uint32_t v;bool ok=s->io.write(s->io.context,s->argument_bytes,argument);
+    if(!s->io.read(s->io.context,s->argument_bytes,&v) || v!=argument)ok=false;
+    if(!s->io.write(s->io.context,s->response_bytes,response))ok=false;
+    if(!s->io.read(s->io.context,s->response_bytes,&v) || v!=response)ok=false;
     return ok;
 }
 static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out){
@@ -72,11 +73,11 @@ static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out
     /* A completed previous error is a ready mailbox too; it belongs to the
      * prior caller. Unrecognized status values do not authorize takeover. */
     if(prior_response!=0 && prior_response!=1 && (prior_response<0xfc || prior_response>0xff)){error(s,DCN302_SMU_PROTOCOL,true);goto done;}
-    if(!s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,&prior_argument)){error(s,DCN302_SMU_IO,true);goto done;}
-    if(!s->io.write(s->io.context,DCN302_SMU_RESPONSE_BYTES,0) ||
-       !s->io.read(s->io.context,DCN302_SMU_RESPONSE_BYTES,&value) || value ||
-       !s->io.write(s->io.context,DCN302_SMU_ARGUMENT_BYTES,parameter) ||
-       !s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,&value) || value!=parameter){
+    if(!s->io.read(s->io.context,s->argument_bytes,&prior_argument)){error(s,DCN302_SMU_IO,true);goto done;}
+    if(!s->io.write(s->io.context,s->response_bytes,0) ||
+       !s->io.read(s->io.context,s->response_bytes,&value) || value ||
+       !s->io.write(s->io.context,s->argument_bytes,parameter) ||
+       !s->io.read(s->io.context,s->argument_bytes,&value) || value!=parameter){
         error(s,DCN302_SMU_READBACK,false);
         if(!restore_untriggered(s,prior_argument,prior_response))error(s,DCN302_SMU_ROLLBACK,true);
         goto done;
@@ -84,9 +85,9 @@ static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out
     /* A failed posted trigger can still have reached hardware. Do not fake
      * completion or resend/reset its mailbox; the owner must prove state. */
     s->dispatched=true;
-    if(!s->io.write(s->io.context,DCN302_SMU_MESSAGE_BYTES,message)){error(s,DCN302_SMU_IO,true);goto done;}
+    if(!s->io.write(s->io.context,s->message_bytes,message)){error(s,DCN302_SMU_IO,true);goto done;}
     if(!wait_response(s,&value,false) || !response_status(s,s->raw_response=value))goto done;
-    if(!s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,out)){error(s,DCN302_SMU_IO,true);goto done;}
+    if(!s->io.read(s->io.context,s->argument_bytes,out)){error(s,DCN302_SMU_IO,true);goto done;}
     s->raw_value=*out;
     result=true;
 done:
@@ -98,12 +99,19 @@ bool dcn302_smu_open(dcn302_smu *s,const dcn302_io *io,uint64_t (*time_us)(void 
     if(!io || !io->read || !io->write || !io->delay_us || !time_us)return error(s,DCN302_SMU_INPUT,false);
     s->io=*io;s->time_us=time_us;
     uint32_t value;
-    if(!send(s,MSG_TEST,0x4e455849,&value)){
-        /* Not a single reply: not a protocol fault but "nobody listens" (response register still 0 after the full wait). */
-        if(s->error==DCN302_SMU_TIMEOUT && !s->raw_response){
-            s->absent=true;s->poisoned=false;s->busy=false;s->ready=false;s->error=DCN302_SMU_OK;return true;
-        }
-        return false;
+    static const uint32_t sets[2][3]={{0x1628au*4u,0x16273u*4u,0x16274u*4u},{(0x1628au+0x200u)*4u,(0x16273u+0x200u)*4u,(0x16274u+0x200u)*4u}};
+    bool answered=false;
+    for(unsigned n=0;n<2 && !answered;n++){
+        s->message_bytes=sets[n][0];s->argument_bytes=sets[n][1];s->response_bytes=sets[n][2];s->mailbox_set=(uint8_t)n;
+        s->poisoned=s->busy=s->dispatched=false;s->error=DCN302_SMU_OK;s->raw_response=0;s->probing=true;
+        if(send(s,MSG_TEST,0x4e455849,&value)){answered=true;break;}
+        /* Not a single reply: not a protocol fault but "nobody listens here" (response register still 0 after the wait). */
+        if(!(s->error==DCN302_SMU_TIMEOUT && !s->raw_response)){s->probing=false;return false;}
+    }
+    s->probing=false;
+    if(!answered){
+        s->absent=true;s->poisoned=false;s->busy=false;s->ready=false;s->error=DCN302_SMU_OK;s->mailbox_set=0;
+        s->message_bytes=sets[0][0];s->argument_bytes=sets[0][1];s->response_bytes=sets[0][2];return true;
     }
     s->raw_test=value;
     if(value!=0x4e45584a)return error(s,DCN302_SMU_PROTOCOL,true);
@@ -171,19 +179,19 @@ bool dcn302_smu_set_floor(dcn302_smu *s,enum dcn302_smu_clock clock,uint32_t mhz
     }
     s->floor_known[clock]=true;s->floor_mhz[clock]=(uint16_t)actual;*out=actual;return true;
 }
-bool dcn302_pmfw_version(const dcn302_io *io,uint64_t (*time_us)(void *),uint32_t *response,uint32_t *version){
+bool dcn302_pmfw_version(const dcn302_io *io,uint64_t (*time_us)(void *),unsigned set,uint32_t *response,uint32_t *version){
     if(!response || !version)return false;
     *response=0;*version=0;
-    if(!io || !io->read || !io->write || !io->delay_us || !time_us)return false;
+    if(!io || !io->read || !io->write || !io->delay_us || !time_us || set>1)return false;
     uint32_t value;
-    if(!io->write(io->context,DCN302_PMFW_RESPONSE_BYTES,0) || !io->write(io->context,DCN302_PMFW_ARGUMENT_BYTES,0) ||
-       !io->write(io->context,DCN302_PMFW_MESSAGE_BYTES,2))return false;   /* PPSMC_MSG_GetSmuVersion: the first message amdgpu sends */
+    if(!io->write(io->context,DCN302_PMFW_RESPONSE_BYTES(set),0) || !io->write(io->context,DCN302_PMFW_ARGUMENT_BYTES(set),0) ||
+       !io->write(io->context,DCN302_PMFW_MESSAGE_BYTES(set),2))return false;   /* PPSMC_MSG_GetSmuVersion: the first message amdgpu sends */
     uint64_t start=time_us(io->context);
     for(unsigned n=0;n<10000;n++){
-        if(!io->read(io->context,DCN302_PMFW_RESPONSE_BYTES,&value))return false;
+        if(!io->read(io->context,DCN302_PMFW_RESPONSE_BYTES(set),&value))return false;
         if(value){
             *response=value;
-            if(value==1 && io->read(io->context,DCN302_PMFW_ARGUMENT_BYTES,&value)){*version=value;return true;}
+            if(value==1 && io->read(io->context,DCN302_PMFW_ARGUMENT_BYTES(set),&value)){*version=value;return true;}
             return false;
         }
         uint64_t now=time_us(io->context);

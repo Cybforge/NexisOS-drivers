@@ -32,11 +32,11 @@ typedef struct {
     uint32_t dpp[5][DCN302_DPP_REGISTER_COUNT];
     uint32_t hubbub[DCN302_HUBBUB_REGISTER_COUNT],reference,timer;
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
-    bool smu_dead;unsigned pmfw_writes;uint32_t pmfw[3];
+    bool smu_dead,smu_alt;unsigned silent_writes;uint32_t scratch[16];
     uint64_t time;
     uint32_t resync[5],pixel_khz,pll_khz;
     uint32_t az_index[6],az[6][0x100],dto[3];
-    uint8_t edid[256];
+    uint8_t edid[256];bool serve_edid;
     uint64_t frame[5],frame_phase[5],frame_time[5];
     unsigned hubp_index;
     bool tx_enabled;
@@ -77,13 +77,33 @@ static uint32_t frame_count(model *m,unsigned i){
     }
     m->frame_time[i]=m->time;return (uint32_t)m->frame[i]&DCN302_FRAME_COUNT_MASK;
 }
+/* Mailbox registers nobody services (the other candidate set, both PMFW driver mailboxes, MP1 status words): reads 0, writes vanish. With
+ * smu_alt the DAL mailbox answers at the Navi23 set (0x200 dwords higher) and the Navi21 set is silent; otherwise the other way round. */
+static int smu_silent(const model *m,uint32_t offset){   /* scratch slot of a silent register, or -1 */
+    const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
+    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
+    for(unsigned n=0;n<3;n++){if(m->smu_alt && offset==base[n])return (int)n;if(!m->smu_alt && offset==alt[n])return 3+(int)n;}
+    for(unsigned set=0;set<2;set++){
+        if(offset==DCN302_PMFW_MESSAGE_BYTES(set))return 6+(int)set*3;
+        if(offset==DCN302_PMFW_ARGUMENT_BYTES(set))return 7+(int)set*3;
+        if(offset==DCN302_PMFW_RESPONSE_BYTES(set))return 8+(int)set*3;
+    }
+    if(offset==(0x16000u+0x263u)*4u)return 12;
+    if(offset==(0x16000u+0x291u)*4u)return 13;
+    return -1;
+}
+static uint32_t smu_map(const model *m,uint32_t offset){
+    const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
+    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
+    if(m->smu_alt)for(unsigned n=0;n<3;n++)if(offset==alt[n])return base[n];
+    return offset;
+}
 static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *out){
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
+    {int slot=smu_silent(m,offset);if(slot>=0){*out=m->scratch[slot];return true;}}
+    offset=smu_map(m,offset);
+    if(offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}
     if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
-    if(offset==DCN302_PMFW_MESSAGE_BYTES || offset==DCN302_PMFW_ARGUMENT_BYTES || offset==DCN302_PMFW_RESPONSE_BYTES){   /* other PMFW mailbox: silent */
-        *out=offset==DCN302_PMFW_MESSAGE_BYTES?m->pmfw[0]:offset==DCN302_PMFW_ARGUMENT_BYTES?m->pmfw[1]:m->pmfw[2];return true;
-    }
-    if(offset==(0x16000u+0x263u)*4u || offset==(0x16000u+0x291u)*4u || offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}   /* diagnostic dump only */
     if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
     if(offset==DCN302_HUBBUB_REF_BYTES){*out=m->reference;return true;}
     if(offset==DCN302_HUBBUB_TIMER_BYTES){*out=m->timer;return true;}
@@ -122,10 +142,9 @@ static bool all_stopped(model *m){
 }
 static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
     model *m=ctx;CHECK(bar==5);
+    {int slot=smu_silent(m,offset);if(slot>=0){m->scratch[slot]=value;m->silent_writes++;return true;}}
+    offset=smu_map(m,offset);
     if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
-    if(offset==DCN302_PMFW_MESSAGE_BYTES){m->pmfw_writes++;m->pmfw[0]=value;return true;}
-    if(offset==DCN302_PMFW_ARGUMENT_BYTES){m->pmfw_writes++;m->pmfw[1]=value;return true;}
-    if(offset==DCN302_PMFW_RESPONSE_BYTES){m->pmfw_writes++;m->pmfw[2]=value;return true;}
     if(offset==DCN302_SMU_ARGUMENT_BYTES){m->smu_writes++;m->smu_argument=value;return true;}
     if(offset==DCN302_SMU_MESSAGE_BYTES){
         m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);if(m->smu_dead)return true;   /* nobody listens: response stays 0 */
@@ -302,7 +321,9 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
 static model *model_of(rx6600_state *s){return s->services->service_context;}
 static bool sink_scrambling(rx6600_state *s,model *m){return (m->dig[s->route.stream][DCN302_HDMI_R_CONTROL]&DCN302_HDMI_SCRAMBLE_MASK)!=0;}
 static bool sink_read_test(void *c,uint8_t address,uint8_t offset,uint8_t *value){
-    rx6600_state *s=c;model *m=model_of(s);if(++m->sink_ops==m->fail_sink || address!=0x54)return false;
+    rx6600_state *s=c;model *m=model_of(s);
+    if(address==0x50 && m->serve_edid){*value=m->edid[offset];return true;}   /* the monitor's EDID EEPROM (only when a scenario asks for it) */
+    if(++m->sink_ops==m->fail_sink || address!=0x54)return false;
     switch(offset){
         case 0x21:*value=((m->scdc[0x20]&1) && m->tx_enabled && sink_scrambling(s,m))?1:0;break;
         case 0x40:{
@@ -550,8 +571,40 @@ static void real_card(bool dead_smu){
     CHECK(ok && s.ready && running0(&m) && ppm_close(m.pixel_khz,t240.pixel_khz) && m.scdc[0x20]==3 && !m.invalid);
     CHECK(rx6600_read_mode(&s,&out) && nexis_gpu_mode_readback_matches(&out,&t240));cases++;
 }
+/* ---- scenario: the firmware handed the kernel no EDID: the driver reads it from the monitor over DDC and still sets up HDMI audio ---- */
+static void edid_over_ddc_case(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    init(&m,&k,4,0,3,2,1,2,4,1,1);
+    k.edid=NULL;k.edid_bytes=0;m.serve_edid=false;
+    CHECK(rx6600_probe(&s,&k)==RX6600_OK && s.edid_source==0 && s.edid_bytes==0);   /* no kernel EDID, DDC engine not modeled here: nothing found, no crash */
+    m.invalid=false;doubles(&s);
+    unsigned bytes=1;CHECK(!rx6600_edid(&s,&bytes) && !bytes);
+    CHECK(rx6600_read_mode(&s,&out));
+    nexis_gpu_timing now_mode=out.timing;
+    CHECK(rx6600_set_mode(&s,&now_mode) && !s.audio_active && !s.sequence_proven);   /* without any EDID there is no audio descriptor: unchanged mode stays untouched */
+    /* Now the monitor answers on DDC (address 0x50, two blocks with a CEA extension): */
+    m.serve_edid=true;rx6600_edid_from_ddc(&s);
+    CHECK(s.edid_source==2 && s.edid_bytes==256 && rx6600_edid(&s,&bytes)==s.edid && bytes==256 && !memcmp(s.edid,m.edid,256));
+    CHECK(rx6600_set_mode(&s,&now_mode) && s.sequence_proven && s.audio_tried && s.audio_active && running(&m));
+    CHECK(rx6600_read_mode(&s,&out) && (out.flags&NEXIS_GPU_SCANOUT_AUDIO));cases++;
+    /* A corrupt EDID (checksum) is rejected. */
+    init(&m,&k,4,0,3,2,1,2,4,1,1);k.edid=NULL;k.edid_bytes=0;CHECK(rx6600_probe(&s,&k)==RX6600_OK);m.invalid=false;doubles(&s);
+    m.serve_edid=true;m.edid[20]^=0x55;rx6600_edid_from_ddc(&s);
+    CHECK(s.edid_source==0 && !rx6600_edid(&s,&bytes));cases++;
+}
+/* ---- scenario: the sequence fails once for the current mode (broken board): later requests are refused without touching the hardware ---- */
+static void selftest_lock(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    start(&m,&k,&s);CHECK(rx6600_read_mode(&s,&out));
+    nexis_gpu_timing base=out.timing,t200=mode_for(&base,1111,200),t144=mode_for(&base,1111,144);
+    m.fail_fw=m.fw_ops+1;m.fail_fw_kind=0;
+    CHECK(!rx6600_set_mode(&s,&t200) && s.selftest_failed);
+    unsigned writes=m.writes,fw=m.fw_ops;
+    if(s.ready){CHECK(!rx6600_set_mode(&s,&t144) && m.writes==writes && m.fw_ops==fw);}
+    cases++;
+}
 int main(void){
-    real_card(false);real_card(true);switches();no_scdc();inject(true);inject(false);
+    edid_over_ddc_case();selftest_lock();real_card(false);real_card(true);switches();no_scdc();inject(true);inject(false);
     printf("{\"passed\":true,\"cases\":%u,\"failures_restored_with_picture\":%u,\"failures_ended_with_output_off\":%u,\"faulted_switches_that_still_completed_with_audio\":%u,\"switches_completed_video_only_after_audio_fault\":%u,\"modeled_only\":true,\"physical_hardware_verified\":false}\n",cases,restored,switched_off,harmless,video_only);
     return 0;
 }

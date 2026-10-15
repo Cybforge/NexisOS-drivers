@@ -28,4 +28,6 @@ typedef struct {
 bool edid_parse(const uint8_t *,size_t,edid_monitor *);
 uint32_t edid_refresh_millihz(const edid_timing *);
 const edid_timing *edid_select_rgb8(const edid_monitor *,uint32_t width,uint32_t height,const edid_link_limits *);
+/* Usable timings best first (highest refresh, one per refresh rate); returns how many were stored (at most max). */
+unsigned edid_candidates_rgb8(const edid_monitor *,uint32_t width,uint32_t height,const edid_link_limits *,const edid_timing **out,unsigned max);
 #endif

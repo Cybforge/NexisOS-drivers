@@ -12,6 +12,7 @@ static bool delay(void *context,uint32_t us){rx6600_state *s=context;return s->s
 static uint64_t now(void *context){rx6600_state *s=context;return s->services->time_us(s->services->service_context);}
 static enum rx6600_error fail(rx6600_state *s,enum rx6600_error error){s->ready=false;s->error=error;return error;}
 static bool resources(rx6600_state *);
+static void edid_report(rx6600_state *);
 static bool sink_read_ddc(void *context,uint8_t address,uint8_t offset,uint8_t *value){return dcn302_ddc_read_byte(&((rx6600_state *)context)->ddc,address,offset,value);}
 static bool sink_write_ddc(void *context,uint8_t address,uint8_t offset,uint8_t value){return dcn302_ddc_write_byte(&((rx6600_state *)context)->ddc,address,offset,value);}
 static bool NEXIS_GPU_CALL clock_floor(void *context,enum dcn302_smu_clock clock,uint32_t mhz,uint32_t *out){
@@ -370,12 +371,20 @@ static void dump_one(rx6600_state *s,const char *name,uint32_t offset){
     if(dump_read(s,offset,&v))nx_logf("rx6600: reg %s @%x = %08x",name,offset,v);
     else nx_logf("rx6600: reg %s @%x unreadable",name,offset);
 }
+/* One line with all six mailbox registers of one candidate set: DAL (MP1 C2PMSG_74/51/52 = message/argument/response) and the PMFW driver
+ * mailbox (C2PMSG_66/82/90). Set 0 is the Navi21 layout Linux hard-codes (MP1 aperture 0x16000), set 1 the Navi23 aperture 0x16200. */
+static void mailbox_line(rx6600_state *s,const char *when,unsigned set){
+    uint32_t v[6]={0};bool ok=true;
+    const uint32_t add=set*0x200u;
+    const uint32_t offs[6]={(0x1628au+add)*4u,(0x16273u+add)*4u,(0x16274u+add)*4u,DCN302_PMFW_MESSAGE_BYTES(set),DCN302_PMFW_ARGUMENT_BYTES(set),DCN302_PMFW_RESPONSE_BYTES(set)};
+    for(unsigned i=0;i<6;i++)if(!dump_read(s,offs[i],&v[i]))ok=false;
+    nx_logf("rx6600: mailbox set %u (MP1 aperture 0x%x)%s, %s: DAL msg %08x arg %08x resp %08x | PMFW msg %08x arg %08x resp %08x",set,0x16000u+add,ok?"":" (some reads failed)",when,
+        v[0],v[1],v[2],v[3],v[4],v[5]);
+}
 static void dump_registers(rx6600_state *s){
     nx_logf("rx6600: --- register dump after the failed probe ---");
     dump_one(s,"FB_BASE",DCN302_FB_BASE_BYTES);dump_one(s,"FB_TOP",DCN302_FB_TOP_BYTES);dump_one(s,"FB_OFFSET",DCN302_FB_OFFSET_BYTES);
-    dump_one(s,"SMU_ARGUMENT",DCN302_SMU_ARGUMENT_BYTES);dump_one(s,"SMU_RESPONSE",DCN302_SMU_RESPONSE_BYTES);dump_one(s,"SMU_MESSAGE",DCN302_SMU_MESSAGE_BYTES);
-    dump_one(s,"PMFW_MESSAGE(C2PMSG_66)",DCN302_PMFW_MESSAGE_BYTES);dump_one(s,"PMFW_ARGUMENT(C2PMSG_82)",DCN302_PMFW_ARGUMENT_BYTES);dump_one(s,"PMFW_RESPONSE(C2PMSG_90)",DCN302_PMFW_RESPONSE_BYTES);
-    dump_one(s,"MP1_C2PMSG_35",(0x16000u+0x263u)*4u);dump_one(s,"MP1_C2PMSG_81",(0x16000u+0x291u)*4u);
+    mailbox_line(s,"after the failed probe",0);mailbox_line(s,"after the failed probe",1);
     dump_one(s,"DFS_PLL",DCN302_DFS_PLL_BYTES);dump_one(s,"DFS_DENTIST",DCN302_DFS_DENTIST_BYTES);dump_one(s,"DFS_DTO_CTRL",DCN302_DFS_DTO_CTRL_BYTES);
     dump_one(s,"HUBBUB_REFCLK_CNTL",DCN302_HUBBUB_REF_BYTES);dump_one(s,"HUBBUB_GLOBAL_TIMER",DCN302_HUBBUB_TIMER_BYTES);
     for(unsigned p=0;p<5;p++){   /* everything the scan-out surface check reads, so one capture shows which condition fails */
@@ -478,6 +487,7 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     if(detail!=DCN302_OK || s->clock.pixel_khz>s->route.max_tmds_khz){nx_logf("rx6600: probe stopped at: measuring the running pixel clock (code %u, %u kHz, limit %u kHz)",detail,s->clock.pixel_khz,s->route.max_tmds_khz);return fail(s,RX6600_CLOCK);}
     if(dcn302_dfs_read(&s->io,&s->dfs)){nx_logf("rx6600: probe stopped at: display clock (DFS) readback");return fail(s,RX6600_CLOCK);}
     nx_logf("rx6600: display clocks: VCO %u kHz%s, DISPCLK %u kHz, DPPCLK %u kHz",s->dfs.vco_khz,s->dfs.vco_default?" (Linux default, PLL_REQ unusable)":"",s->dfs.disp_khz,s->dfs.dpp_khz);
+    mailbox_line(s,"before any message",0);mailbox_line(s,"before any message",1);
     if(!dcn302_smu_open(&s->smu,&s->io,now)){
         nx_logf("rx6600: probe stopped at: power-management (SMU) mailbox (error %u, test reply 0x%x, version 0x%x, last response 0x%x)",
             (unsigned)s->smu.error,s->smu.raw_test,s->smu.version,s->smu.raw_response);
@@ -487,10 +497,11 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
         /* The first real RX 6600 never answered the DAL mailbox (run 8). Linux then runs with smu_present=false and does no clock
          * management at all; this driver does the same and keeps everything the video BIOS set up. The other PMFW mailbox is
          * asked once for its version so the next log shows whether the firmware is alive at all. */
-        uint32_t response,version;
-        const bool alive_pmfw=dcn302_pmfw_version(&s->io,now,&response,&version);
-        nx_logf("rx6600: power management: the SMU does not answer the DAL mailbox (response 0x%x); PMFW driver mailbox %s (response 0x%x, version 0x%x)",
-            s->smu.raw_response,alive_pmfw?"answers":"is silent too",response,version);
+        uint32_t response[2],version[2];
+        const bool alive_pmfw[2]={dcn302_pmfw_version(&s->io,now,0,&response[0],&version[0]),dcn302_pmfw_version(&s->io,now,1,&response[1],&version[1])};
+        nx_logf("rx6600: power management: the SMU does not answer the DAL mailbox at either register set; PMFW driver mailbox set 0 %s (response 0x%x, version 0x%x), set 1 %s (response 0x%x, version 0x%x)",
+            alive_pmfw[0]?"answers":"is silent",response[0],version[0],alive_pmfw[1]?"answers":"is silent",response[1],version[1]);
+        mailbox_line(s,"after the queries",0);mailbox_line(s,"after the queries",1);
         /* Display clocks stay exactly as found: their voltage floor is what the BIOS state already runs at. Memory, fabric and PHY
          * clocks cannot be read back, so the bandwidth model gets the LOWEST plausible level of each (more latency, larger
          * watermarks: the safe direction). They are stand-ins, not measurements. */
@@ -503,6 +514,7 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
         nx_logf("rx6600: no clock management: DISPCLK %u / DPPCLK %u MHz stay as the BIOS set them; assumed SOC %u, memory %u, DCF %u, PHY %u MHz",
             s->dfs.disp_floor_mhz,s->dfs.dpp_floor_mhz,RX6600_ASSUMED_SOCCLK_MHZ,RX6600_ASSUMED_UCLK_MHZ,RX6600_ASSUMED_DCEFCLK_MHZ,RX6600_ASSUMED_PHYCLK_MHZ);
     }
+    if(!s->smu.absent)nx_logf("rx6600: power management: SMU answers on mailbox set %u (version 0x%x, test reply 0x%x)",(unsigned)s->smu.mailbox_set,s->smu.version,s->smu.raw_test);
     if(s->smu.header_mismatch || s->smu.interface_mismatch)
         nx_logf("rx6600: note: SMU header version %u (expected 1), driver interface 0x%x (expected 0x%x); continuing like Linux",
             s->smu.raw_header,s->smu.raw_interface,(unsigned)DCN302_SMU_INTERFACE);
@@ -520,6 +532,7 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     s->sampled_us=now(s);
     if(!dcn302_otg_frame_count(&s->io,s->route.otg,&s->sampled_frame)){nx_logf("rx6600: probe stopped at: OTG frame counter");return fail(s,RX6600_CLOCK);}
     if(!dcn302_ddc_init(&s->ddc,&s->io,s->route.ddc,s->board.reference_khz)){nx_logf("rx6600: probe stopped at: DDC (monitor I2C) setup");return fail(s,RX6600_ROUTE);}
+    rx6600_edid_from_ddc(s);edid_report(s);
     nx_logf("rx6600: probe ok, %ux%u at %u kHz (%u.%03u Hz), HDMI path %u, OTG %u, link %u, stream %u, DDC %u, max TMDS %u kHz",
         s->route.shape.hactive,s->route.shape.vactive,s->clock.pixel_khz,s->clock.refresh_millihz/1000,s->clock.refresh_millihz%1000,
         s->route.path,s->route.otg,s->route.link,s->route.stream,s->route.ddc,s->route.max_tmds_khz);
@@ -555,6 +568,42 @@ bool rx6600_read_mode(rx6600_state *s,nexis_gpu_scanout *out){
     out->flags=NEXIS_GPU_SCANOUT_ACTIVE|NEXIS_GPU_SCANOUT_HDMI|NEXIS_GPU_SCANOUT_CLOCK_MEASURED|(s->audio_active?NEXIS_GPU_SCANOUT_AUDIO:0);
     s->busy=false;return true;
 }
+const uint8_t *rx6600_edid(const rx6600_state *s,unsigned *bytes){
+    if(s->services && s->services->edid && s->services->edid_bytes>=128){*bytes=s->services->edid_bytes;return s->services->edid;}
+    if(s->edid_source==2 && s->edid_bytes){*bytes=s->edid_bytes;return s->edid;}
+    *bytes=0;return NULL;
+}
+static bool edid_block_ok(const uint8_t *b,bool first){
+    unsigned sum=0;
+    for(unsigned i=0;i<128;i++)sum+=b[i];
+    if(sum&255)return false;
+    return !first || (b[0]==0 && b[1]==255 && b[2]==255 && b[3]==255 && b[4]==255 && b[5]==255 && b[6]==255 && b[7]==0);
+}
+/* The firmware handed the kernel no EDID (or an unusable one): ask the monitor itself over the connector's DDC engine, like Linux does. */
+void rx6600_edid_from_ddc(rx6600_state *s){
+    unsigned have;
+    if(rx6600_edid(s,&have))return;
+    uint8_t block[256];unsigned want=128;
+    for(unsigned off=0;off<want;off++){
+        if(!s->sink_read(s,0x50,(uint8_t)off,&block[off])){nx_logf("rx6600: EDID over DDC: read of byte %u failed",off);return;}
+    }
+    if(!edid_block_ok(block,true)){nx_logf("rx6600: EDID over DDC: first block is not valid");return;}
+    if(block[126]>=1){
+        want=256;
+        for(unsigned off=128;off<want;off++)if(!s->sink_read(s,0x50,(uint8_t)off,&block[off])){want=128;break;}
+        if(want==256 && !edid_block_ok(block+128,false))want=128;
+    }
+    memcpy(s->edid,block,want);s->edid_bytes=want;s->edid_source=2;
+    nx_logf("rx6600: EDID read over DDC: %u bytes",want);
+}
+static void edid_report(rx6600_state *s){
+    unsigned bytes;const uint8_t *edid=rx6600_edid(s,&bytes);
+    if(!edid){nx_logf("rx6600: no monitor EDID (kernel none, DDC none): HDMI audio cannot be planned");return;}
+    nx_audio_caps caps;
+    if(!nx_audio_caps_from_edid(edid,bytes,&caps)){nx_logf("rx6600: EDID %s (%u bytes): no HDMI audio descriptor found",s->edid_source==2?"over DDC":"from the kernel",bytes);return;}
+    nx_logf("rx6600: EDID %s (%u bytes): monitor '%s', LPCM rates %02x sizes %x speakers %02x, stereo 48 kHz 16 bit %s",s->edid_source==2?"over DDC":"from the kernel",bytes,
+        caps.name,caps.lpcm_rates,caps.lpcm_sizes,caps.speakers,nx_audio_caps_stereo48(&caps)?"yes":"NO");
+}
 bool rx6600_is_running_mode(const rx6600_state *s,const nexis_gpu_timing *t){
     if(!s || !t || !t->pixel_khz)return false;
     nexis_gpu_timing shape=*t;shape.pixel_khz=0;
@@ -579,8 +628,9 @@ bool rx6600_set_mode(rx6600_state *s,const nexis_gpu_timing *t){
         /* The hardware already runs exactly this measured mode. Audio is only set up by the full native sequence, so an
          * unchanged mode still goes through it once when the monitor can play sound and nothing has done so yet. */
         bool audio=false;
-        if(!s->audio_active && !s->audio_tried && s->services->edid && s->services->edid_bytes){
-            nx_audio_caps caps;audio=nx_audio_caps_from_edid(s->services->edid,s->services->edid_bytes,&caps) && nx_audio_caps_stereo48(&caps);
+        unsigned edid_bytes;const uint8_t *edid=rx6600_edid(s,&edid_bytes);
+        if(!s->audio_active && !s->audio_tried && edid){
+            nx_audio_caps caps;audio=nx_audio_caps_from_edid(edid,edid_bytes,&caps) && nx_audio_caps_stereo48(&caps);
         }
         if(!audio){s->error=RX6600_OK;return true;}
         nx_logf("rx6600: unchanged mode: running the native sequence once to set up HDMI audio");

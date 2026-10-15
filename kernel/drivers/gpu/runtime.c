@@ -197,21 +197,37 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
     const edid_monitor *monitor=display_monitor_get();nexis_gpu_scanout actual;
     /* Remember the firmware mode so a trial can be reverted. */
     R.have_initial=scanout(&R.initial);
-    edid_timing desired={0};edid_link_limits limits={R.driver.max_pixel_khz,R.driver.max_tmds_khz,R.driver.hdmi,R.driver.scdc};
-    const edid_timing *chosen=monitor?edid_select_rgb8(monitor,fb_get_width(),fb_get_height(),&limits):NULL;
-    if(chosen && !R.have_initial){
+    edid_link_limits limits={R.driver.max_pixel_khz,R.driver.max_tmds_khz,R.driver.hdmi,R.driver.scdc};
+    /* Best usable EDID timings first. The first real RX 6600 never got past a single attempt, so a target that fails is no longer the end: the
+     * driver rolls a failed switch back with the old picture, and the next candidate (finally the unchanged firmware mode, which also sets up
+     * HDMI audio) is tried. */
+    const edid_timing *candidates[3];
+    unsigned count=monitor?edid_candidates_rgb8(monitor,fb_get_width(),fb_get_height(),&limits,candidates,3):0;
+    if(!R.have_initial){
         /* Never change a mode that cannot be restored. */
-        kprintf("[GPU] Firmware-Modus konnte nicht zurückgelesen werden; Wechsel in den nativen Modus abgelehnt\n");release(true);return false;
+        if(count)kprintf("[GPU] Firmware-Modus konnte nicht zurückgelesen werden; Wechsel in den nativen Modus abgelehnt\n");
+        release(true);return false;
     }
-    if(chosen){
-        desired=*chosen;
-        desired.flags&=3u;nexis_gpu_timing target;memcpy(&target,&desired,sizeof(target));
-        if(!R.driver.set_mode(R.driver.state,&target) || !scanout(&actual) || !nexis_gpu_mode_readback_matches(&actual,&target)){
-            kprintf("[GPU] Nativer Modus abgelehnt oder Hardware-Rücklesung weicht ab; vorherige Ausgabe wird wiederhergestellt\n");release(true);return false;
-        }
-    }else if(!scanout(&actual)){release(true);return false;}
+    edid_timing firmware;memcpy(&firmware,&R.initial.timing,sizeof(firmware));uint32_t firmware_hz=edid_refresh_millihz(&firmware);
+    kprintf("[GPU] Moduswahl: Monitor-EDID %s, %u Zielmodi bis %u kHz Pixeltakt; Firmware-Modus %u.%03u Hz\n",monitor?"vorhanden":"fehlt",count,
+        (unsigned)R.driver.max_pixel_khz,firmware_hz/1000,firmware_hz%1000);
+    bool applied=false;
+    for(unsigned n=0;n<count+1 && !applied;n++){
+        nexis_gpu_timing target;edid_timing desired;
+        if(n<count){desired=*candidates[n];desired.flags&=3u;memcpy(&target,&desired,sizeof(target));}
+        else target=R.initial.timing;   /* last resort / no EDID target: the running mode; the driver still sets up HDMI audio */
+        memcpy(&desired,&target,sizeof(desired));
+        uint32_t hz=edid_refresh_millihz(&desired);
+        kprintf("[GPU] Versuch %u: %ux%u bei %u.%03u Hz (%u kHz)%s\n",n+1,desired.hactive,desired.vactive,hz/1000,hz%1000,desired.clock_khz,n==count?" - Firmware-Modus mit Audio-Einrichtung":"");
+        if(R.driver.set_mode(R.driver.state,&target) && scanout(&actual) && nexis_gpu_mode_readback_matches(&actual,&target)){applied=true;break;}
+        kprintf("[GPU] Versuch %u abgelehnt oder Hardware-Rücklesung weicht ab\n",n+1);
+        if(!scanout(&actual)){kprintf("[GPU] Ausgabe nach dem Fehlversuch nicht mehr nutzbar; vorherige Ausgabe wird wiederhergestellt\n");release(true);return false;}
+    }
+    if(!applied && !scanout(&actual)){release(true);return false;}
+    /* A mode that was refused but left the old picture in place keeps the driver (HDMI audio may still work); say so. */
+    if(!applied)kprintf("[GPU] Kein Zielmodus angenommen; der Treiber bleibt mit dem Firmware-Modus aktiv\n");
     if(!fb_native_activate(actual.framebuffer,actual.pitch,actual.format,R.name)){release(true);return false;}
-    memcpy(&desired,&actual.timing,sizeof(desired));display_set_native_mode(&desired);
+    edid_timing desired;memcpy(&desired,&actual.timing,sizeof(desired));display_set_native_mode(&desired);
     R.resident=R.active=true;R.audio=(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0;R.last_poll_us=time_us(&R);
     kprintf("[GPU] Beibehaltenes natives Modul: %s, Hardware-Modus %u.%03u Hz; HDMI-Pakete %u\n",R.name,
         edid_refresh_millihz(&desired)/1000,edid_refresh_millihz(&desired)%1000,(actual.flags&NEXIS_GPU_SCANOUT_AUDIO)!=0);
@@ -227,6 +243,7 @@ void gpu_runtime_poll(void){
 }
 bool gpu_runtime_active(void){return R.active;}
 bool gpu_runtime_audio(void){return R.active && R.audio;}
+const char *gpu_runtime_name(void){return R.active?R.name:NULL;}
 bool gpu_runtime_revert(void){
     /* Put the firmware mode back, then unload the module. The framebuffer
      * address never changed, so the desktop keeps drawing into the same memory. */
