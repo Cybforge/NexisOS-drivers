@@ -13,7 +13,8 @@ static bool hpd_index(const atom_board_path *p,unsigned *index){
 static bool ddc_index(const atom_board_path *p,unsigned *index){
     if(!p->has_ddc || !p->ddc_hardware || p->ddc_slave || p->ddc_gpio.index>UINT32_MAX/4 || p->ddc_gpio.shift>=32)return false;
     uint32_t bit=1u<<p->ddc_gpio.shift;
-    for(unsigned i=0;i<5;i++)if(p->ddc_gpio.index*4==dcn302_ddc_gpio_bytes[i] && bit==dcn302_ddc_clk_mask[i] && p->ddc_line==i){*index=i;return true;}
+    /* DC_GPIO_DDCn_A: CLK is bit 0, DATA is bit 8 (dcn_3_0_2_sh_mask.h). The video BIOS lists the DATA pin (shift 8 on the real RX 6600). */
+    for(unsigned i=0;i<5;i++)if(p->ddc_gpio.index*4==dcn302_ddc_gpio_bytes[i] && (bit==dcn302_ddc_clk_mask[i] || bit==(dcn302_ddc_clk_mask[i]<<8)) && p->ddc_line==i){*index=i;return true;}
     return false;
 }
 enum dcn302_route_error dcn302_route_connected(const dcn302_io *io,const atom_board_path *p,unsigned hpd,bool *connected){
@@ -25,7 +26,9 @@ enum dcn302_route_error dcn302_route_connected(const dcn302_io *io,const atom_bo
      * follows when firmware enabled the HPD block, which a card initialised by the video BIOS / GOP need not have done:
      * demanding SENSE == SENSE_DELAYED would reject a perfectly connected monitor. */
     unsigned sense=(value&DCN302_HPD_SENSE_MASK)>>DCN302_HPD_SENSE_SHIFT;
-    *connected=sense==p->hpd_state;return DCN302_ROUTE_OK;
+    /* Linux never evaluates the BIOS record's plugin_pin_state (bios_parser2.c copies it to hpd_active, nothing reads it): a
+     * connected monitor is a HIGH HPD pin. The RX 6600 BIOS has plugin_pin_state 0 on every connector while its monitor reads 1. */
+    *connected=sense!=0;return DCN302_ROUTE_OK;
 }
 enum dcn302_route_error dcn302_route_find(const dcn302_io *io,const atom_board *board,unsigned width,unsigned height,dcn302_route *out){
     if(!out)return DCN302_ROUTE_INPUT;

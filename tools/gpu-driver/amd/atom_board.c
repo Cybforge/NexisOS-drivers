@@ -32,9 +32,11 @@ static enum atom_board_error records(const atom_table *table,unsigned start,unsi
     if(start<minimum || start>=table->size)return ATOM_BOARD_TABLE;
     unsigned seen=0;
     for(unsigned off=start;off<table->size;){
+        const uint8_t *r=table->bytes+off;unsigned type=r[0];
+        if(type==255)return ATOM_BOARD_OK;      /* the end marker is ONE byte: on the real RX 6600 it is the very last byte of the table */
         if(table->size-off<2)return ATOM_BOARD_TABLE;
-        const uint8_t *r=table->bytes+off;unsigned type=r[0],size=r[1];
-        if(type==255 || !size)return ATOM_BOARD_OK;
+        unsigned size=r[1];
+        if(!size)return ATOM_BOARD_OK;
         if(size<2 || size>table->size-off)return ATOM_BOARD_TABLE;
         unsigned flag=type==1?1:type==2?2:type==20?4:type==23?8:0;
         if(flag && (seen&flag))return ATOM_BOARD_AMBIGUOUS;

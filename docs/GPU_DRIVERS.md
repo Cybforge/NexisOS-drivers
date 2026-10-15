@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v5 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v6 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,21 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Fünfter Hardwarelauf (2026-10-15) und Paket v6: erstmals mit den echten BIOS-Tabellen getestet
+
+Das Fehlerprotokoll von v5 enthielt zum ersten Mal die rohen BIOS-Tabellen der Karte (object_info, gpio_pin_lut, dce_info, vram_info,
+`tests/host/real_rx6600_vbios.h`). Mit ihnen stoppte der Host-Test genau an den Stellen der echten Karte; behoben:
+
+* **Anschlusstabelle (stoppte bei „board data, code 2“, Ursache gefunden):** die Endmarkierung einer Record-Kette (`0xff`) ist **ein**
+  Byte; beim HDMI-Anschluss ist sie das allerletzte Byte der Tabelle, der Parser verlangte aber auch dafür ein zweites Byte.
+* **DDC-Pin:** die BIOS-Tabelle nennt den **Daten**-Pin der DDC-Leitung (Bit 8 von `DC_GPIO_DDCn_A`, Takt ist Bit 0); der Code verglich nur mit dem Takt-Bit.
+* **HPD-Polarität:** `plugin_pin_state` des BIOS-Eintrags ist 0 auf allen Anschlüssen der Karte, Linux wertet das Feld nie aus
+  (`bios_parser2.c` kopiert es nach `hpd_active`, gelesen wird es nirgends); „verbunden“ ist ein hoher HPD-Pegel.
+* **VRAM-Tabelle (v2.5):** die Module sind 45–55 Byte groß (Linux-Struktur: 84), der Parser verlangte 84; die Module sind
+  Alternativen (das BIOS-Scratch-Register wählt eins), kein Addieren: Geometrie vom ersten (8192 MB GDDR6, 8 Kanäle × 16 Bit).
+* Der Host-Test `real_card()` läuft jetzt mit den **echten** Tabellen und Registerwerten komplett durch die Probe.
+  Weiter ungeprüft auf echter Hardware: SMU-Antworten, Pixeltakt-Messung, der Moduswechsel selbst, DDC/SCDC, Audio.
 
 ## Vierter Hardwarelauf (2026-10-15, ohne Log) und Paket v5: Abgleich mit Linux v6.12
 

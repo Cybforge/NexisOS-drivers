@@ -1,4 +1,5 @@
 #include "../../tools/gpu-driver/amd/rx6600.h"
+#include "real_rx6600_vbios.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -309,7 +310,13 @@ static void failures(void){
 /* The register values the owner's real RX 6600 (1002:73ff, GOP 1920x1080 over HDMI) showed in the run-3 failure dump.
  * Registers that were not dumped keep the Linux-convention values of init(). */
 static void real_card_init(model *m,nexis_gpu_services *k){
-    init(m,k,0,0,0,1,2,0,0,0,1);
+    init(m,k,0,0,0,2,2,0,0,0,1);
+    /* The REAL video BIOS tables of the card (tests/host/real_rx6600_vbios.h) replace the synthetic ones. vram_info is far bigger
+     * than this test ROM: only its first module matters, so its size field is cut down to fit. */
+    memcpy(m->rom+1900,gpio_pin_lut,sizeof(gpio_pin_lut));m->rom[104+12*2]=1900&255;m->rom[104+12*2+1]=1900>>8;   /* 108 bytes would overwrite the PCIR block at 280 */
+    memcpy(m->rom+400,object_info,sizeof(object_info));
+    memset(m->rom+1600,0,100);memcpy(m->rom+1600,dce_info_head,sizeof(dce_info_head));m->rom[1600]=100;m->rom[1601]=0;   /* real size 212 would overlap this test ROM's ATOM header at 1720 */
+    memset(m->rom+600,0,108);memcpy(m->rom+600,vram_info_head,sizeof(vram_info_head));m->rom[600]=0x6c;m->rom[601]=0;
     m->vram=(nexis_gpu_resource){0x7fe0000000ULL,0x10000000ULL,7,0};m->registers=(nexis_gpu_resource){0xfca00000,0x100000,9,0};
     k->framebuffer=0x7fe0000000ULL;k->pitch=1920;k->framebuffer_bytes=1920u*4*1080;
     m->fb_base=0x8000;m->fb_top=0x81ff;m->fb_offset=0;

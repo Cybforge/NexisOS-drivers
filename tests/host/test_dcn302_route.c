@@ -48,8 +48,14 @@ static void normal(void){
     }
     init(&m,&io,&b,4,0,3,2,1);b.paths[0].has_encoder_caps=false;
     CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK && r.max_tmds_khz==340000);cases++;
-    init(&m,&io,&b,4,0,3,2,1);b.paths[0].hpd_state=0;m.hpd[1]=0;
+    init(&m,&io,&b,4,0,3,2,1);b.paths[0].ddc_gpio.shift=8;   /* the real BIOS lists the DDC DATA pin (bit 8), the clock is bit 0 */
+    CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK && r.ddc==2);cases++;
+    /* The BIOS record's plugin_pin_state is never a polarity (Linux ignores it; it is 0 on every connector of the real RX 6600):
+     * a high HPD pin is connected whatever the record says, a low pin is not. */
+    init(&m,&io,&b,4,0,3,2,1);b.paths[0].hpd_state=0;
     CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK);cases++;
+    init(&m,&io,&b,4,0,3,2,1);b.paths[0].hpd_state=0;m.hpd[1]=0;
+    CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_ABSENT);cases++;
 }
 static void rejected(void){
     model m;dcn302_io io;atom_board b;dcn302_route r,zero={0};

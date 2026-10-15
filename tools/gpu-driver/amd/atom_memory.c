@@ -14,26 +14,21 @@ enum atom_memory_error atom_memory_open(const atom_rom *rom,atom_memory *out){
     if(t.size<24 || !t.bytes[20] || t.bytes[20]>16)return ATOM_MEMORY_TABLE;
     unsigned module_size_offset=t.revision==5?10:20;
     unsigned type_offset=t.revision==5?13:23;
-    unsigned min_size=t.revision==3?52:t.revision==4?60:84;
-    size_t offset=24;atom_memory first={0};
-    for(unsigned n=0;n<t.bytes[20];n++){
-        if(offset>t.size || t.size-offset<min_size)return ATOM_MEMORY_TABLE;
-        const uint8_t *p=t.bytes+offset;unsigned size=u16(p+module_size_offset);
-        if(size<min_size || size>t.size-offset)return ATOM_MEMORY_TABLE;
-        atom_memory m={.memory_mb=u32(p),.channel_enable=u32(p+4),
-            .type=p[type_offset],.channels=p[type_offset+1],.modules=t.bytes[20]};
-        unsigned log2_bits=p[type_offset+2];
-        if(m.type!=0x70 || m.channels<1 || m.channels>16 || log2_bits<4 || log2_bits>6 ||
-           !m.memory_mb || m.memory_mb>65536)return ATOM_MEMORY_GEOMETRY;
-        m.channel_bytes=(uint8_t)((1u<<log2_bits)/8);
-        /* Linux ignores channel_enable; with several modules it is a per-module mask (disjoint bits). Only the
-         * geometry has to agree; the capacities add up. */
-        if(n){
-            if(first.type!=m.type || first.channels!=m.channels || first.channel_bytes!=m.channel_bytes)return ATOM_MEMORY_AMBIGUOUS;
-            if((uint64_t)first.memory_mb+m.memory_mb>UINT32_MAX)return ATOM_MEMORY_GEOMETRY;
-            first.memory_mb+=m.memory_mb;first.channel_enable|=m.channel_enable;
-        }else first=m;
-        offset+=size;
-    }
+    /* Only the fixed part up to channel_width is needed. The real RX 6600 table carries 45..55-byte module entries, not the
+     * 84 bytes of Linux's struct atom_vram_module_v11 (its dram_pnstring is shorter); the stride is the entry's own
+     * vram_module_size field (amdgpu_atomfirmware_get_vram_info). */
+    unsigned min_size=t.revision==5?16:26;
+    size_t offset=24;
+    /* The modules are ALTERNATIVES for the memory chips fitted to this board (the BIOS scratch register picks one); they are
+     * not additive. Geometry is taken from the first, which every module of one board shares. */
+    if(offset>t.size || t.size-offset<min_size)return ATOM_MEMORY_TABLE;
+    const uint8_t *p=t.bytes+offset;unsigned size=u16(p+module_size_offset);
+    if(size<min_size || size>t.size-offset)return ATOM_MEMORY_TABLE;
+    atom_memory first={.memory_mb=u32(p),.channel_enable=u32(p+4),
+        .type=p[type_offset],.channels=p[type_offset+1],.modules=t.bytes[20]};
+    unsigned log2_bits=p[type_offset+2];
+    if(first.type!=0x70 || first.channels<1 || first.channels>16 || log2_bits<4 || log2_bits>6 ||
+       !first.memory_mb || first.memory_mb>65536)return ATOM_MEMORY_GEOMETRY;
+    first.channel_bytes=(uint8_t)((1u<<log2_bits)/8);
     *out=first;return ATOM_MEMORY_OK;
 }
