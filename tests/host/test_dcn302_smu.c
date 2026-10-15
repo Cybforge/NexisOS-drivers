@@ -36,6 +36,7 @@ static uint32_t mapped(const model *m,uint32_t a){
 }
 static bool rd(void *ctx,uint32_t address,uint32_t *out){
     model *m=ctx;if(++m->ops==m->fail)return false;
+    if(!m->alt && is_alt(address)){*out=0xffffffffu;return true;}   /* nothing decodes the Navi23 guess: all ones */
     if(silent(m,address)){*out=m->scratch[slot(address)];return true;}
     address=mapped(m,address);
     if(address==DCN302_SMU_RESPONSE_BYTES){if(m->pending && m->time>=m->due)complete(m);*out=m->response;return true;}
@@ -45,6 +46,7 @@ static bool rd(void *ctx,uint32_t address,uint32_t *out){
 static bool wr(void *ctx,uint32_t address,uint32_t value){
     model *m=ctx;unsigned op=++m->ops;m->writes++;
     if(op==m->fail && !m->post_failure)return false;
+    if(!m->alt && is_alt(address))return op!=m->fail;
     if(silent(m,address)){m->scratch[slot(address)]=value;return op!=m->fail;}
     address=mapped(m,address);
     if(op!=m->ignore){
@@ -110,8 +112,10 @@ static void failures(void){
         if(kind==5 || kind==8){          /* idle mailbox of a card that only ran the video BIOS: Linux ignores the first wait */
             CHECK(dcn302_smu_open(&s,&io,now) && s.ready && !s.poisoned && m.triggers==4 && !m.invalid);cases++;continue;
         }
+        if(kind==6){   /* unrecognized idle contents: not a mailbox that works, so "no SMU" - nothing is written */
+            CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !s.ready && !s.poisoned && !m.triggers && !m.writes && !m.invalid);cases++;continue;
+        }
         CHECK(!dcn302_smu_open(&s,&io,now) && !s.ready && !s.busy && !m.invalid);
-        if(kind==6)CHECK(!m.triggers && !m.writes);
         cases++;
     }
     for(unsigned status=0xfc;status<=0xff;status++){
@@ -168,12 +172,12 @@ static void fault_transactions(void){
     }
     /* Ignored response/argument writes must fail before a trigger, then restore
      * the prior completed mailbox without replaying its message register. */
-    for(unsigned ignore=3;ignore<=5;ignore+=2){
+    for(unsigned ignore=4;ignore<=6;ignore+=2){
         io=init(&m);m.ignore=ignore;CHECK(!dcn302_smu_open(&s,&io,now) && !s.dispatched && !m.triggers && !s.poisoned && m.argument==0xabcdef && m.response==1);cases++;
     }
     /* A dropped trigger is indistinguishable from a pending command until the
      * bounded timeout. It must never cause another trigger or fake response. */
-    io=init(&m);m.ignore=7;CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !s.ready && !s.poisoned && s.dispatched && !m.triggers && !m.response && !s.busy && dcn302_smu_usable(&s));cases++;
+    io=init(&m);m.ignore=8;CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !s.ready && !s.poisoned && s.dispatched && !m.triggers && !m.response && !s.busy && dcn302_smu_usable(&s));cases++;
     /* Absent mode (nobody answers, like the first real RX 6600): usable, never touches the mailbox again, only confirms assumed levels. */
     {
         unsigned ops=m.ops;uint32_t got;dcn302_smu_limits seen;
@@ -189,6 +193,9 @@ static void fault_transactions(void){
         cases++;
     }
     io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && s.mailbox_set==0 && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,96));cases++;
+    /* Regression of v10: unrecognized register contents at the first set (and all ones at the second) are "no mailbox here", never a failed probe. */
+    io=init(&m);m.response=0x80000000u;CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !s.poisoned && !s.ready && dcn302_smu_usable(&s));cases++;
+    io=init(&m);m.response=0xffffffffu;CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !m.triggers && !s.poisoned);cases++;   /* all ones at the first set: not even a message is sent */
     /* The Navi23 register set (MP1 aperture 0x16200): the Navi21 addresses stay silent, the second candidate answers and is used from then on. */
     io=init(&m);m.alt=true;CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && s.mailbox_set==1 && s.version==0x3a0100 && m.triggers==4 && !s.poisoned);
     CHECK(s.message_bytes==DCN302_SMU_ALT_MESSAGE_BYTES && s.argument_bytes==DCN302_SMU_ALT_ARGUMENT_BYTES && s.response_bytes==DCN302_SMU_ALT_RESPONSE_BYTES);

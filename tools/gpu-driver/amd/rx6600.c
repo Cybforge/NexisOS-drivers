@@ -374,12 +374,41 @@ static void dump_one(rx6600_state *s,const char *name,uint32_t offset){
 /* One line with all six mailbox registers of one candidate set: DAL (MP1 C2PMSG_74/51/52 = message/argument/response) and the PMFW driver
  * mailbox (C2PMSG_66/82/90). Set 0 is the Navi21 layout Linux hard-codes (MP1 aperture 0x16000), set 1 the Navi23 aperture 0x16200. */
 static void mailbox_line(rx6600_state *s,const char *when,unsigned set){
+    if(!nx_log_enabled())return;   /* diagnosis only: no register reads without a log */
     uint32_t v[6]={0};bool ok=true;
     const uint32_t add=set*0x200u;
     const uint32_t offs[6]={(0x1628au+add)*4u,(0x16273u+add)*4u,(0x16274u+add)*4u,DCN302_PMFW_MESSAGE_BYTES(set),DCN302_PMFW_ARGUMENT_BYTES(set),DCN302_PMFW_RESPONSE_BYTES(set)};
     for(unsigned i=0;i<6;i++)if(!dump_read(s,offs[i],&v[i]))ok=false;
     nx_logf("rx6600: mailbox set %u (MP1 aperture 0x%x)%s, %s: DAL msg %08x arg %08x resp %08x | PMFW msg %08x arg %08x resp %08x",set,0x16000u+add,ok?"":" (some reads failed)",when,
         v[0],v[1],v[2],v[3],v[4],v[5]);
+}
+/* Nonzero dwords of a register window (dword indices first .. first+count-1), six per log line: shows which parts of the power-management
+ * blocks are alive without printing hundreds of zero lines. */
+static void window_lines(rx6600_state *s,const char *name,uint32_t first,unsigned count){
+    if(!nx_log_enabled())return;
+    uint32_t off[6],val[6];unsigned n=0,total=0;
+    for(unsigned i=0;i<=count;i++){
+        uint32_t v=0;bool nonzero=false;
+        if(i<count){nonzero=dump_read(s,(first+i)*4u,&v) && v;if(nonzero)total++;}
+        if(nonzero){off[n]=first+i;val[n]=v;n++;}
+        if(n==6 || (i==count && n)){
+            nx_logf("rx6600: %s: %x=%08x %x=%08x %x=%08x %x=%08x %x=%08x %x=%08x",name,off[0],val[0],n>1?off[1]:0,n>1?val[1]:0,n>2?off[2]:0,n>2?val[2]:0,
+                n>3?off[3]:0,n>3?val[3]:0,n>4?off[4]:0,n>4?val[4]:0,n>5?off[5]:0,n>5?val[5]:0);
+            n=0;
+        }
+    }
+    if(!total)nx_logf("rx6600: %s: all zero or unreadable",name);
+}
+/* Absent-SMU diagnosis: is the power-management firmware alive at all? MP1 public registers over SMN (firmware flags sit at offset 0x24/0x28 of
+ * 0x3010000; bit 31 = interrupts enabled = firmware running) and the mailbox register windows of both aperture bases. */
+static void smu_explore(rx6600_state *s){
+    if(!nx_log_enabled())return;
+    uint32_t v[16];bool ok=true;
+    for(unsigned i=0;i<16;i++)if(!dcn302_smn_read(&s->io,0x03b10000u+i*4u,&v[i]))ok=false;
+    nx_logf("rx6600: SMN MP1 public 03b10000..3c%s: %08x %08x %08x %08x %08x %08x %08x %08x",ok?"":" (some reads failed)",v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7]);
+    nx_logf("rx6600: SMN MP1 public 03b10020..5c: %08x %08x %08x %08x %08x %08x %08x %08x",v[8],v[9],v[10],v[11],v[12],v[13],v[14],v[15]);
+    window_lines(s,"MP0 C2PMSG window 16040..160af",0x16040u,0x70);
+    window_lines(s,"MP1 C2PMSG window 16240..162af",0x16240u,0x70);
 }
 static void dump_registers(rx6600_state *s){
     nx_logf("rx6600: --- register dump after the failed probe ---");
@@ -497,11 +526,13 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
         /* The first real RX 6600 never answered the DAL mailbox (run 8). Linux then runs with smu_present=false and does no clock
          * management at all; this driver does the same and keeps everything the video BIOS set up. The other PMFW mailbox is
          * asked once for its version so the next log shows whether the firmware is alive at all. */
-        uint32_t response[2],version[2];
-        const bool alive_pmfw[2]={dcn302_pmfw_version(&s->io,now,0,&response[0],&version[0]),dcn302_pmfw_version(&s->io,now,1,&response[1],&version[1])};
+        uint32_t response[2]={0,0},version[2]={0,0};
+        bool alive_pmfw[2]={false,false};
+        if(nx_log_enabled()){alive_pmfw[0]=dcn302_pmfw_version(&s->io,now,0,&response[0],&version[0]);alive_pmfw[1]=dcn302_pmfw_version(&s->io,now,1,&response[1],&version[1]);}   /* diagnosis only */
         nx_logf("rx6600: power management: the SMU does not answer the DAL mailbox at either register set; PMFW driver mailbox set 0 %s (response 0x%x, version 0x%x), set 1 %s (response 0x%x, version 0x%x)",
             alive_pmfw[0]?"answers":"is silent",response[0],version[0],alive_pmfw[1]?"answers":"is silent",response[1],version[1]);
         mailbox_line(s,"after the queries",0);mailbox_line(s,"after the queries",1);
+        smu_explore(s);
         /* Display clocks stay exactly as found: their voltage floor is what the BIOS state already runs at. Memory, fabric and PHY
          * clocks cannot be read back, so the bandwidth model gets the LOWEST plausible level of each (more latency, larger
          * watermarks: the safe direction). They are stand-ins, not measurements. */

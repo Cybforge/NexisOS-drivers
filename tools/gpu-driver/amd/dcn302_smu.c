@@ -50,7 +50,7 @@ static bool response_status(dcn302_smu *s,uint32_t r){
         case 0xfd:return error(s,DCN302_SMU_PREREQUISITE,false);
         case 0xfe:return error(s,DCN302_SMU_UNSUPPORTED,false);
         case 0xff:return error(s,DCN302_SMU_FAILED,false);
-        default:return error(s,DCN302_SMU_PROTOCOL,true);
+        default:s->unrecognized=true;return error(s,DCN302_SMU_PROTOCOL,true);
     }
 }
 static bool restore_untriggered(dcn302_smu *s,uint32_t argument,uint32_t response){
@@ -72,7 +72,7 @@ static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out
     if(!wait_response(s,&prior_response,true))goto done;
     /* A completed previous error is a ready mailbox too; it belongs to the
      * prior caller. Unrecognized status values do not authorize takeover. */
-    if(prior_response!=0 && prior_response!=1 && (prior_response<0xfc || prior_response>0xff)){error(s,DCN302_SMU_PROTOCOL,true);goto done;}
+    if(prior_response!=0 && prior_response!=1 && (prior_response<0xfc || prior_response>0xff)){s->unrecognized=true;error(s,DCN302_SMU_PROTOCOL,true);goto done;}
     if(!s->io.read(s->io.context,s->argument_bytes,&prior_argument)){error(s,DCN302_SMU_IO,true);goto done;}
     if(!s->io.write(s->io.context,s->response_bytes,0) ||
        !s->io.read(s->io.context,s->response_bytes,&value) || value ||
@@ -100,16 +100,22 @@ bool dcn302_smu_open(dcn302_smu *s,const dcn302_io *io,uint64_t (*time_us)(void 
     s->io=*io;s->time_us=time_us;
     uint32_t value;
     static const uint32_t sets[2][3]={{0x1628au*4u,0x16273u*4u,0x16274u*4u},{(0x1628au+0x200u)*4u,(0x16273u+0x200u)*4u,(0x16274u+0x200u)*4u}};
-    bool answered=false;
+    bool answered=false,any_dispatched=false;
     for(unsigned n=0;n<2 && !answered;n++){
         s->message_bytes=sets[n][0];s->argument_bytes=sets[n][1];s->response_bytes=sets[n][2];s->mailbox_set=(uint8_t)n;
-        s->poisoned=s->busy=s->dispatched=false;s->error=DCN302_SMU_OK;s->raw_response=0;s->probing=true;
+        s->poisoned=s->busy=s->dispatched=s->unrecognized=false;s->error=DCN302_SMU_OK;s->raw_response=0;s->probing=true;
+        /* All ones = nothing decodes this address (the first real RX 6600 read ffffffff at the Navi23 set): not a mailbox, nothing is sent. */
+        uint32_t idle;
+        if(!s->io.read(s->io.context,s->response_bytes,&idle)){s->probing=false;return error(s,DCN302_SMU_IO,false);}
+        if(idle==UINT32_MAX)continue;
         if(send(s,MSG_TEST,0x4e455849,&value)){answered=true;break;}
-        /* Not a single reply: not a protocol fault but "nobody listens here" (response register still 0 after the wait). */
-        if(!(s->error==DCN302_SMU_TIMEOUT && !s->raw_response)){s->probing=false;return false;}
+        if(s->dispatched)any_dispatched=true;
+        /* A register access that fails is a real error; "no answer" and unrecognized register contents just mean this is not a working mailbox. */
+        if(!((s->error==DCN302_SMU_TIMEOUT && !s->raw_response) || s->unrecognized)){s->probing=false;return false;}
     }
     s->probing=false;
     if(!answered){
+        s->dispatched=any_dispatched;   /* a command may still be pending at the silent set: it is never repeated, nothing more is sent */
         s->absent=true;s->poisoned=false;s->busy=false;s->ready=false;s->error=DCN302_SMU_OK;s->mailbox_set=0;
         s->message_bytes=sets[0][0];s->argument_bytes=sets[0][1];s->response_bytes=sets[0][2];return true;
     }
@@ -199,4 +205,12 @@ bool dcn302_pmfw_version(const dcn302_io *io,uint64_t (*time_us)(void *),unsigne
         if(!io->delay_us(io->context,10))return false;
     }
     return false;
+}
+bool dcn302_smn_read(const dcn302_io *io,uint32_t address,uint32_t *value){
+    uint32_t check;
+    if(!value)return false;
+    *value=0;
+    if(!io || !io->read || !io->write)return false;
+    return io->write(io->context,DCN302_PCIE_INDEX2_BYTES,address) && io->read(io->context,DCN302_PCIE_INDEX2_BYTES,&check) &&
+        io->read(io->context,DCN302_PCIE_DATA2_BYTES,value);
 }

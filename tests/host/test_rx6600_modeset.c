@@ -79,19 +79,23 @@ static uint32_t frame_count(model *m,unsigned i){
 }
 /* Mailbox registers nobody services (the other candidate set, both PMFW driver mailboxes, MP1 status words): reads 0, writes vanish. With
  * smu_alt the DAL mailbox answers at the Navi23 set (0x200 dwords higher) and the Navi21 set is silent; otherwise the other way round. */
-static int smu_silent(const model *m,uint32_t offset){   /* scratch slot of a silent register, or -1 */
+static int smu_silent(const model *m,uint32_t offset){   /* scratch slot of a silent (stored, never serviced) register, or -1 */
     const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
-    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
-    for(unsigned n=0;n<3;n++){if(m->smu_alt && offset==base[n])return (int)n;if(!m->smu_alt && offset==alt[n])return 3+(int)n;}
-    for(unsigned set=0;set<2;set++){
-        if(offset==DCN302_PMFW_MESSAGE_BYTES(set))return 6+(int)set*3;
-        if(offset==DCN302_PMFW_ARGUMENT_BYTES(set))return 7+(int)set*3;
-        if(offset==DCN302_PMFW_RESPONSE_BYTES(set))return 8+(int)set*3;
-    }
+    for(unsigned n=0;n<3;n++)if(m->smu_alt && offset==base[n])return (int)n;
+    for(unsigned n=0;n<3;n++)if(offset==DCN302_PMFW_MESSAGE_BYTES(0)+(n==0?0:n==1?DCN302_PMFW_ARGUMENT_BYTES(0)-DCN302_PMFW_MESSAGE_BYTES(0):DCN302_PMFW_RESPONSE_BYTES(0)-DCN302_PMFW_MESSAGE_BYTES(0)))return 6+(int)n;
     if(offset==(0x16000u+0x263u)*4u)return 12;
     if(offset==(0x16000u+0x291u)*4u)return 13;
+    if(offset==DCN302_PCIE_INDEX2_BYTES)return 14;
     return -1;
 }
+/* Addresses nothing decodes: reads return all ones, writes vanish (the Navi23 aperture guess of the first real card, the second PMFW set). */
+static bool smu_unmapped(const model *m,uint32_t offset){
+    const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
+    for(unsigned n=0;n<3;n++)if(!m->smu_alt && offset==alt[n])return true;
+    return offset==DCN302_PMFW_MESSAGE_BYTES(1) || offset==DCN302_PMFW_ARGUMENT_BYTES(1) || offset==DCN302_PMFW_RESPONSE_BYTES(1);
+}
+/* The rest of the power-management register windows read as zero (diagnostic dumps), SMN data too. */
+static bool smu_zero_window(uint32_t offset){return (offset>=0x16000u*4u && offset<0x16300u*4u) || offset==DCN302_PCIE_DATA2_BYTES;}
 static uint32_t smu_map(const model *m,uint32_t offset){
     const uint32_t base[3]={DCN302_SMU_MESSAGE_BYTES,DCN302_SMU_ARGUMENT_BYTES,DCN302_SMU_RESPONSE_BYTES};
     const uint32_t alt[3]={DCN302_SMU_ALT_MESSAGE_BYTES,DCN302_SMU_ALT_ARGUMENT_BYTES,DCN302_SMU_ALT_RESPONSE_BYTES};
@@ -100,6 +104,7 @@ static uint32_t smu_map(const model *m,uint32_t offset){
 }
 static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *out){
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
+    if(smu_unmapped(m,offset)){*out=0xffffffffu;return true;}
     {int slot=smu_silent(m,offset);if(slot>=0){*out=m->scratch[slot];return true;}}
     offset=smu_map(m,offset);
     if(offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}
@@ -132,6 +137,7 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
     }
     if(offset==DCN302_FB_BASE_BYTES){*out=m->fb_base;return true;}if(offset==DCN302_FB_TOP_BYTES){*out=m->fb_top;return true;}
     if(offset==DCN302_FB_OFFSET_BYTES){*out=m->fb_offset;return true;}
+    if(smu_zero_window(offset)){*out=0;return true;}
     m->invalid=true;return false;
 }
 #define INJECT_BEFORE() do{if(m->writes==m->ignore_mmio_write)return true;if(m->writes==m->fail_mmio_write && !m->posted)return false;}while(0)
@@ -142,6 +148,7 @@ static bool all_stopped(model *m){
 }
 static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
     model *m=ctx;CHECK(bar==5);
+    if(smu_unmapped(m,offset)){m->silent_writes++;return true;}
     {int slot=smu_silent(m,offset);if(slot>=0){m->scratch[slot]=value;m->silent_writes++;return true;}}
     offset=smu_map(m,offset);
     if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
@@ -159,6 +166,7 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
         }
         m->smu_response=m->smu_status;m->smu_argument=result;return true;
     }
+    if(smu_zero_window(offset)){m->silent_writes++;return true;}
     m->writes++;
     /* OTG enable/VTG writes are the only ones allowed while a pipe runs. */
     for(unsigned i=0;i<5;i++){

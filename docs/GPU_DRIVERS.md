@@ -124,6 +124,32 @@ braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert �
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
 
+## Neunter Hardwarelauf (2026-10-15) und Paket v10: erstes erfolgreiches Laden, aber 60 Hz ohne Ton
+
+Fotos in `rx6600 test bilder`: v9 läuft durch die Probe („probe ok, 1920x1080 at 148512 kHz“), das Modul bleibt geladen, der Nutzer bestätigt den
+Modus. Es gab aber **keinen Moduswechsel** (kein „mode switch“-Eintrag), „HDMI packets 0“ (kein Ton), und die Einstellungen zeigten weiter „Modus 1 von 9
+(UEFI GOP)“. Der Treiber war also aktiv, hat aber nichts getan. Die SMU antwortete weiterhin nicht, „PMFW driver mailbox is silent too“.
+
+* **Mögliche Ursache der stummen Firmware (neu gefunden, Navi23-spezifisch):** Linux `dimgrey_cavefish_ip_offset.h` setzt für die RX 6600 (Navi23)
+  `MP1_BASE__INST0_SEG0 = 0x00016200`, Navi21 dagegen 0x16000. v8/v9 fragten nur die Navi21-Adressen ab (DAL-Mailbox 0x1628A/0x16273/0x16274 laut
+  Linux-Hartcodierung, PMFW-Treibermailbox C2PMSG_66/82/90 bei 0x16282/…). v10 probiert **beide Registersätze** (Navi21 und +0x200 Dwords =
+  Navi23) und nimmt den, der antwortet; das Log zeigt `power management: SMU answers on mailbox set N`. Antwortet keiner, bleibt der Modus ohne
+  Taktverwaltung (v9). Beim Start loggt das Modul **alle sechs Mailbox-Register beider Sätze** (`mailbox set 0/1 …`) vor und nach den Abfragen und
+  fragt beide PMFW-Treibermailboxen mit `GetSmuVersion` (nur lesen). Ob die Karte nun antwortet, ist **ungeprüft**.
+* **Kernel (neues ISO nötig):** `kernel/drivers/gpu/runtime.c` wählt jetzt bis zu **drei Zielmodi** aus dem EDID (höchste Hz zuerst, je Hz einer) und
+  probiert sie der Reihe nach; ein abgelehnter Wechsel (Treiber stellt das Bild wieder her) ist nicht mehr das Ende. Zuletzt wird der **laufende
+  Firmware-Modus** mit Audio-Einrichtung versucht – das ist der Fall der v9-Fotos: ohne EDID-Ziel wurde nie `set_mode` aufgerufen, also lief die
+  Sequenz mit der Audio-Einrichtung nie. Neue Logzeilen: `Moduswahl: Monitor-EDID vorhanden/fehlt, N Zielmodi …`, `Versuch n: …`.
+* **Modul:** liest das Monitor-EDID selbst über DDC (Adresse 0x50, Prüfsumme je Block), wenn der Kernel keins hat; logt `EDID from the kernel / over DDC:
+  monitor …, LPCM …, stereo 48 kHz 16 bit yes/NO`. Schlägt die Sequenz für den **aktuellen** Modus einmal fehl (`selftest_failed`), wird sie nicht
+  wiederholt (kein weiterer Blackout).
+* **Einstellungen → Anzeige:** zeigt bei aktivem nativen Treiber „Grafiktreiber / Bildwiederholrate / HDMI-Audio“ statt „UEFI GOP“.
+* **240 Hz bleibt ohne Taktverwaltung unerreichbar** (DISPCLK/DPPCLK bleiben bei ca. 166 MHz). Selbst mit den Linux-Grenzwerten des niedrigsten
+  Spannungszustands (DISPCLK 562, DPPCLK 300 MHz) reicht ein Pixel pro Takt nur bis etwa 290 MHz; 558 MHz bräuchten eine zweite Pipe (ODM-Combine)
+  oder eine höhere Spannungsstufe über die SMU.
+* Getestet nur im Host-Modell (neu: zwei Mailbox-Sätze, EDID über DDC, Selbsttest-Sperre, EDID-Kandidatenliste); QEMU-Tests bestehen
+  (`Moduswahl … Versuch 1 … Firmware-Modus mit Audio-Einrichtung` erscheint im QEMU-Log). **Nicht auf der echten Karte geprüft.**
+
 ## Achter Hardwarelauf (2026-10-15) und Paket v9: die Power-Management-Firmware antwortet nicht
 
 Mit v8 kam die Probe bis „power-management (SMU) mailbox (error 4, test reply 0x0, version 0x0, last response 0x0)“: Der DAL-Mailbox

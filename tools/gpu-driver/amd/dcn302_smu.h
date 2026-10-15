@@ -22,7 +22,7 @@ typedef struct {uint32_t features;uint16_t frequency_mhz[DCN302_SMU_MAX_LEVELS];
 typedef struct {
     dcn302_io io;uint64_t (*time_us)(void *);
     /* Mailbox registers in use (byte offsets) and which of the two candidate sets answered (0 = Linux/Navi21 addresses, 1 = MP1 base 0x16200). */
-    uint32_t message_bytes,argument_bytes,response_bytes;uint8_t mailbox_set;bool probing;
+    uint32_t message_bytes,argument_bytes,response_bytes;uint8_t mailbox_set;bool probing,unrecognized;
     uint32_t version;bool ready,busy,poisoned,dispatched;
     /* absent: the very first command was never answered (response register stayed 0 for 2 s). The power-management
      * firmware of a card that was only POSTed by the video BIOS does not service the DAL mailbox yet. Linux then keeps
@@ -52,6 +52,11 @@ bool dcn302_smu_assume(dcn302_smu *,enum dcn302_smu_clock,uint32_t mhz);
 #define DCN302_PMFW_MESSAGE_BYTES(set) ((0x16282u+(set)*0x200u)*4u)
 #define DCN302_PMFW_ARGUMENT_BYTES(set) ((0x16292u+(set)*0x200u)*4u)
 #define DCN302_PMFW_RESPONSE_BYTES(set) ((0x1629au+(set)*0x200u)*4u)
+/* Read one register of the SoC's SMN address space through the NBIO index/data pair (mmPCIE_INDEX2/DATA2, dwords 0x0e/0x0f; Linux
+ * nbio_2_3_offset.h, amdgpu RREG32_PCIE). Read-only diagnosis of the power-management block (MP1_Public = 0x03b00000). */
+#define DCN302_PCIE_INDEX2_BYTES (0x0eu*4u)
+#define DCN302_PCIE_DATA2_BYTES (0x0fu*4u)
+bool dcn302_smn_read(const dcn302_io *,uint32_t address,uint32_t *value);
 bool dcn302_pmfw_version(const dcn302_io *,uint64_t (*time_us)(void *),unsigned set,uint32_t *response,uint32_t *version);
 bool dcn302_smu_clock_limits(dcn302_smu *,enum dcn302_smu_clock,dcn302_smu_limits *);
 /* Actual native SetHardMinByFreq, MHz, with acknowledged configured floor.
