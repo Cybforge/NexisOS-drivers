@@ -123,7 +123,7 @@ static bool NEXIS_GPU_CALL bandwidth_plan(void *context,const nexis_gpu_timing *
      * AMD dcn302_fpu.c. It is not a fabricated measured FCLK. */
     i->fabric_khz=i->dcf_khz;i->phy_khz=(uint32_t)s->smu.floor_mhz[DCN302_SMU_PHYCLK]*1000u;
     i->disp_khz=dfs->disp_khz;i->dpp_khz=dfs->pipe_khz[s->surface.hubp];i->ref_khz=s->reference.khz;
-    i->vco_khz_q32=(((uint64_t)(dfs->pll&DCN302_DFS_INTEGER_MASK)<<32)|(dfs->pll&DCN302_DFS_FRACTION_MASK))*100000u;
+    i->vco_khz_q32=dfs->vco_q32;
     unsigned line;enum nexis_dml_scope_result scope=dcn302_dml_calculate(j,&line);
     if(scope!=NEXIS_DML_SCOPE_OK || j->error!=DCN302_DML_OK){s->error=RX6600_BANDWIDTH;goto done;}
     *out=j->output;ok=true;s->error=RX6600_OK;
@@ -390,6 +390,29 @@ static void dump_registers(rx6600_state *s){
     }
 }
 
+/* A board-data or VRAM-table failure on real hardware cannot be reproduced here: print the raw bytes of the tables the parsers read
+ * (object info, GPIO pin table, DCE info, VRAM info) so one dmesg capture shows what the video BIOS really contains. */
+static void dump_hex(const char *name,const uint8_t *p,unsigned n){
+    static const char hx[]="0123456789abcdef";
+    for(unsigned o=0;o<n;o+=16){
+        char line[16*3+1];unsigned l=0,m=n-o<16?n-o:16;
+        for(unsigned i=0;i<m;i++){line[l++]=hx[p[o+i]>>4];line[l++]=hx[p[o+i]&15];line[l++]=' ';}
+        line[l]=0;nx_logf("rx6600: %s +%03x: %s",name,o,line);
+    }
+}
+static const char *table_name(unsigned index){   /* a switch, not a pointer table: the module has no runtime relocations */
+    switch(index){case 22:return "object_info";case 12:return "gpio_pin_lut";case 27:return "dce_info";default:return "vram_info";}
+}
+static void dump_rom_tables(const atom_rom *rom){
+    static const uint8_t indexes[4]={22,12,27,28};
+    static const uint8_t limits[4]={224,112,64,96};
+    for(unsigned i=0;i<4;i++){
+        atom_table t;const char *name=table_name(indexes[i]);
+        if(!atom_rom_table(rom,false,indexes[i],&t)){nx_logf("rx6600: ROM table %s (index %u): missing or invalid",name,(unsigned)indexes[i]);continue;}
+        nx_logf("rx6600: ROM table %s: size %u, format %u, revision %u",name,(unsigned)t.size,(unsigned)t.format,(unsigned)t.revision);
+        dump_hex(name,t.bytes,t.size<limits[i]?t.size:limits[i]);
+    }
+}
 static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k){
     if(!s)return RX6600_INPUT;
     memset(s,0,sizeof(*s));
@@ -424,9 +447,9 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     s->firmware_rom=rom;
     if(!rom.checksum_ok)nx_logf("rx6600: note: the video BIOS image checksum is not zero (tables are still used)");
     unsigned detail=atom_board_open(&rom,&s->board);
-    if(detail!=ATOM_BOARD_OK){nx_logf("rx6600: probe stopped at: board data of the video BIOS (code %u)",detail);return fail(s,RX6600_BOARD);}
+    if(detail!=ATOM_BOARD_OK){nx_logf("rx6600: probe stopped at: board data of the video BIOS (code %u)",detail);dump_rom_tables(&rom);return fail(s,RX6600_BOARD);}
     detail=atom_memory_open(&rom,&s->memory);
-    if(detail!=ATOM_MEMORY_OK){nx_logf("rx6600: probe stopped at: VRAM description of the video BIOS (code %u)",detail);return fail(s,RX6600_MEMORY);}
+    if(detail!=ATOM_MEMORY_OK){nx_logf("rx6600: probe stopped at: VRAM description of the video BIOS (code %u)",detail);dump_rom_tables(&rom);return fail(s,RX6600_MEMORY);}
     if(dcn302_reference_read(&s->io,s->board.reference_khz,&s->reference)){nx_logf("rx6600: probe stopped at: reference clock readback (BIOS says %u kHz)",s->board.reference_khz);return fail(s,RX6600_CLOCK);}
     detail=dcn302_route_find(&s->io,&s->board,k->width,k->height,&s->route);
     if(detail!=DCN302_ROUTE_OK){nx_logf("rx6600: probe stopped at: finding the HDMI output that UEFI lights (code %u, desktop %ux%u)",detail,k->width,k->height);return fail(s,RX6600_ROUTE);}
@@ -438,6 +461,7 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     detail=dcn302_clock_measure(&s->io,s->route.otg,now,16,&s->clock);
     if(detail!=DCN302_OK || s->clock.pixel_khz>s->route.max_tmds_khz){nx_logf("rx6600: probe stopped at: measuring the running pixel clock (code %u, %u kHz, limit %u kHz)",detail,s->clock.pixel_khz,s->route.max_tmds_khz);return fail(s,RX6600_CLOCK);}
     if(dcn302_dfs_read(&s->io,&s->dfs)){nx_logf("rx6600: probe stopped at: display clock (DFS) readback");return fail(s,RX6600_CLOCK);}
+    nx_logf("rx6600: display clocks: VCO %u kHz%s, DISPCLK %u kHz, DPPCLK %u kHz",s->dfs.vco_khz,s->dfs.vco_default?" (Linux default, PLL_REQ unusable)":"",s->dfs.disp_khz,s->dfs.dpp_khz);
     if(!dcn302_smu_open(&s->smu,&s->io,now)){
         nx_logf("rx6600: probe stopped at: power-management (SMU) mailbox (error %u, test reply 0x%x, version 0x%x, last response 0x%x)",
             (unsigned)s->smu.error,s->smu.raw_test,s->smu.version,s->smu.raw_response);

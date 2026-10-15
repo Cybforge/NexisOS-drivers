@@ -42,7 +42,7 @@ enum dcn302_route_error dcn302_route_find(const dcn302_io *io,const atom_board *
         if(!HG(enable,LINK_ENABLE))continue;
         if(++active_links>1)return DCN302_ROUTE_AMBIGUOUS;
         if(!HG(enable,LINK_CLOCK))return DCN302_ROUTE_CHANGED;
-        if(HG(be,LINK_MODE)!=3)return DCN302_ROUTE_UNSUPPORTED;
+        if(HG(be,LINK_MODE)!=3 && HG(be,LINK_MODE)!=2)return DCN302_ROUTE_UNSUPPORTED;   /* TMDS: HDMI, or DVI as UEFI GOP often leaves it */
         unsigned mask=HG(be,FE_SOURCE),stream=0;
         if(!mask || mask>16 || (mask&(mask-1)))return DCN302_ROUTE_UNSUPPORTED;
         while((1u<<stream)!=mask)stream++;

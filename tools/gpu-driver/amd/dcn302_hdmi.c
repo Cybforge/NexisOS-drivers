@@ -67,6 +67,11 @@ static bool restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
     }
     if(!set_readback(io,t->instance,DCN302_HDMI_R_AFMT_PACKET,DCN302_HDMI_SAMPLE_SEND_MASK,DCN302_HDMI_CS_UPDATE_MASK,t->registers[DCN302_HDMI_R_AFMT_PACKET]&~DCN302_HDMI_CS_UPDATE_MASK))ok=false;
     if(!set_readback(io,t->instance,DCN302_HDMI_R_GC,DCN302_HDMI_AVMUTE_MASK,0,t->registers[DCN302_HDMI_R_GC]))ok=false;
+    /* The link was a DVI link before we made it HDMI: give it back as it was (the link is disabled here). */
+    if(t->mode_changed){
+        if(set_readback(io,t->link,DCN302_HDMI_R_BE,DCN302_HDMI_LINK_MODE_MASK,0,t->registers[DCN302_HDMI_R_BE]))t->mode_changed=false;
+        else ok=false;
+    }
     if(ok){t->prepared=false;t->committed=false;}
     return ok;
 }
@@ -84,7 +89,9 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     if(!rd(io,link,DCN302_HDMI_R_BE_ENABLE,&enabled) || !rd(io,link,DCN302_HDMI_R_BE,&be) ||
        !rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&clock_control) || !rd(io,inst,DCN302_HDMI_R_AFMT_POWER,&power))return DCN302_HDMI_IO;
     if(GET(enabled,LINK_ENABLE))return DCN302_HDMI_BUSY;
-    if(GET(be,LINK_MODE)!=3 || GET(be,FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
+    /* TMDS only: HDMI (3) as the video BIOS usually leaves it, or DVI (2) as UEFI GOP does for many monitors; DVI is
+     * switched to HDMI below (data islands, infoframes and audio need DIG_MODE 3, Linux dcn10_link_encoder_setup). */
+    if((GET(be,LINK_MODE)!=3 && GET(be,LINK_MODE)!=2) || GET(be,FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
     if(!GET(clock_control,CLOCK_ENABLE) || !GET(clock_control,CLOCK_ON) || GET(power,POWER_STATE))return DCN302_HDMI_CLOCK;
     for(unsigned n=0;n<DCN302_HDMI_REGISTER_COUNT;n++){
         unsigned index=(n==DCN302_HDMI_R_BE || n==DCN302_HDMI_R_BE_ENABLE)?link:inst;
@@ -93,7 +100,7 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     /* Do not publish a valid snapshot after routing/clock ownership changed
      * between the initial checks and the saved-register reads. */
     if(GET(t->registers[DCN302_HDMI_R_BE_ENABLE],LINK_ENABLE))return DCN302_HDMI_BUSY;
-    if(GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=3 ||
+    if((GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=3 && GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=2) ||
        GET(t->registers[DCN302_HDMI_R_BE],FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
     if(!GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ENABLE) || !GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ON) ||
        GET(t->registers[DCN302_HDMI_R_AFMT_POWER],POWER_STATE))return DCN302_HDMI_CLOCK;
@@ -120,6 +127,11 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     target[DCN302_HDMI_R_CS2]=SET(SET(SET(SET(SET(SET(target[DCN302_HDMI_R_CS2],CHANNEL2,3),CHANNEL3,4),CHANNEL4,5),CHANNEL5,6),CHANNEL6,7),CHANNEL7,8);
     target[DCN302_HDMI_R_AFMT_INFO]|=DCN302_HDMI_INFO_UPDATE_MASK;
     target[DCN302_HDMI_R_AFMT_PACKET]=SET(target[DCN302_HDMI_R_AFMT_PACKET],SAMPLE_SEND,0)|DCN302_HDMI_CS_UPDATE_MASK;
+    if(GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)==2){
+        t->mode_changed=true;       /* set first: a half-done write is reverted by restore() */
+        if(!set_readback(io,link,DCN302_HDMI_R_BE,DCN302_HDMI_LINK_MODE_MASK,0,SET(t->registers[DCN302_HDMI_R_BE],LINK_MODE,3)))
+            return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+    }
     if(!set_readback(io,inst,DCN302_HDMI_R_GC,DCN302_HDMI_AVMUTE_MASK,0,DCN302_HDMI_AVMUTE_MASK) ||
        !set_readback(io,inst,DCN302_HDMI_R_AFMT_PACKET,DCN302_HDMI_SAMPLE_SEND_MASK,0,0))return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
     for(unsigned n=0;n<sizeof(owned)/sizeof(*owned);n++){

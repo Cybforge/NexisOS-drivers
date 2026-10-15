@@ -56,9 +56,12 @@ static bool NEXIS_GPU_CALL write32(void *context,unsigned bar,uint32_t offset,ui
 static void read_bars(const pci_device_t *d,uint32_t raw[6]){
     for(unsigned n=0;n<6;n++)raw[n]=pci_read_dword(d->bus,d->slot,d->func,0x10+n*4);
 }
-static void firmware_ranges(const nexis_boot_info_t *boot,uint64_t base[6],uint64_t bytes[6]){
-    /* Boot handoff is packed. Copy fields to aligned arrays before decoding. */
-    for(unsigned n=0;n<6;n++){base[n]=boot->gpu_bar_address[n];bytes[n]=boot->gpu_bar_bytes[n];}
+static void firmware_ranges(const nexis_boot_info_t *boot,const uint32_t raw[6],uint64_t base[6],uint64_t bytes[6]){
+    /* Boot handoff is packed. Copy fields to aligned arrays before decoding; they are indexed by the UEFI BAR entry
+     * (64-bit BARs take one entry), not by the config register, so translate them first. */
+    uint64_t entry_base[6],entry_bytes[6];
+    for(unsigned n=0;n<6;n++){entry_base[n]=boot->gpu_bar_address[n];entry_bytes[n]=boot->gpu_bar_bytes[n];}
+    gpu_pci_firmware_ranges(raw,entry_base,entry_bytes,base,bytes);
 }
 static bool device_ready(const pci_device_t *d){
     return pci_read_dword(d->bus,d->slot,d->func,0)==((uint32_t)d->device_id<<16|d->vendor_id) &&
@@ -77,7 +80,7 @@ static bool NEXIS_GPU_CALL resource(void *context,unsigned bar,nexis_gpu_resourc
     const nexis_boot_info_t *boot=bootinfo_get();const pci_device_t *d=&R.device;
     if(!boot)return resource_reject("keine Boot-Information",bar);
     if(!device_ready(d))return resource_reject("Adapter nicht bereit (Hersteller/Klasse/Speicher-Freigabe/Header-Typ)",bar);
-    uint32_t raw[6],again[6];uint64_t base[6],bytes[6];read_bars(d,raw);firmware_ranges(boot,base,bytes);
+    uint32_t raw[6],again[6];uint64_t base[6],bytes[6];read_bars(d,raw);firmware_ranges(boot,raw,base,bytes);
     nexis_gpu_resource live;
     if(!gpu_pci_resource_decode(raw,base,bytes,bar,&live))return resource_reject("BAR stimmt nicht mit dem von UEFI gemeldeten Bereich überein",bar);
     if(live.base!=R.resources[bar].base || live.bytes!=R.resources[bar].bytes ||
@@ -162,7 +165,7 @@ bool gpu_runtime_load(const uint8_t *data,size_t bytes,pci_device_t *device){
     }
     /* Metadata includes large VRAM apertures. Only independently matched small
      * banks are mapped for register access; no large aperture is mapped here. */
-    uint32_t raw[6];uint64_t base_ranges[6],byte_ranges[6];read_bars(device,raw);firmware_ranges(boot,base_ranges,byte_ranges);
+    uint32_t raw[6];uint64_t base_ranges[6],byte_ranges[6];read_bars(device,raw);firmware_ranges(boot,raw,base_ranges,byte_ranges);
     for(unsigned n=0;n<6;n++){
         /* One line per BAR: this is the first thing to read if a driver reports a resource problem. */
         if(!gpu_pci_resource_decode(raw,base_ranges,byte_ranges,n,&R.resources[n])){

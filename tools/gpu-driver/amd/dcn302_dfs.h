@@ -7,7 +7,8 @@ enum dcn302_dfs_error {DCN302_DFS_OK,DCN302_DFS_INPUT,DCN302_DFS_IO,DCN302_DFS_B
 typedef struct {
     uint32_t pll,dentist,dto_control,dto[5];
     uint32_t vco_khz,disp_khz,dpp_khz,pipe_khz[5];
-    uint32_t disp_floor_mhz,dpp_floor_mhz;bool valid;
+    uint64_t vco_q32;                       /* VCO in kHz as 32.32 fixed point (exact, or the Linux default) */
+    uint32_t disp_floor_mhz,dpp_floor_mhz;bool valid,vco_default;   /* vco_default: PLL_REQ held no usable multiplier */
 } dcn302_dfs_snapshot;
 typedef struct {uint32_t disp_khz,dpp_khz,pipe_khz[5];} dcn302_dfs_request;
 typedef struct {

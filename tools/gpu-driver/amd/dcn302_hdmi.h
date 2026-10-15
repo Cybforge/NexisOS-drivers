@@ -4,7 +4,7 @@
 #include "dcn302_hdmi_regs.h"
 enum dcn302_hdmi_error {DCN302_HDMI_OK,DCN302_HDMI_INPUT,DCN302_HDMI_IO,DCN302_HDMI_BUSY,DCN302_HDMI_CLOCK,DCN302_HDMI_READBACK,DCN302_HDMI_ROLLBACK};
 typedef struct {
-    bool valid,prepared,committed,audio;unsigned instance,link;
+    bool valid,prepared,committed,audio,mode_changed;unsigned instance,link;   /* mode_changed: DIG_MODE was DVI (2) and is HDMI (3) now */
     uint32_t registers[DCN302_HDMI_REGISTER_COUNT];
 } dcn302_hdmi_transaction;
 /* Native DCN302 HDMI RGB8 + stereo PCM48 audio packet engine.

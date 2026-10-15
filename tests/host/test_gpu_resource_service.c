@@ -41,8 +41,8 @@ static void init(void){
     config[0]=0x73ff1002;config[1]=2;config[2]=0x03000000;
     config[4]=0x0c;config[5]=8;config[9]=0xb0000000;
     boot.gpu_bar_address[0]=0x800000000ULL;boot.gpu_bar_bytes[0]=0x200000000ULL;
-    boot.gpu_bar_address[5]=0xb0000000;boot.gpu_bar_bytes[5]=0x100000;
-    uint32_t raw[6];uint64_t base[6],bytes[6];read_bars(&R.device,raw);firmware_ranges(&boot,base,bytes);
+    boot.gpu_bar_address[4]=0xb0000000;boot.gpu_bar_bytes[4]=0x100000;   /* UEFI BAR entry 4: BAR0 is 64-bit (one entry), BAR1-4 are unimplemented 32-bit entries */
+    uint32_t raw[6];uint64_t base[6],bytes[6];read_bars(&R.device,raw);firmware_ranges(&boot,raw,base,bytes);
     CHECK(gpu_pci_resource_decode(raw,base,bytes,0,&R.resources[0]));
     CHECK(gpu_pci_resource_decode(raw,base,bytes,5,&R.resources[5]));
     R.resources[5].flags|=8;R.bar[5]=0xb0000000;R.bar_bytes[5]=0x100000;

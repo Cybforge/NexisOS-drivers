@@ -23,7 +23,8 @@ static bool rd(void *context,uint32_t offset,uint32_t *out){
 static bool wr(void *context,uint32_t offset,uint32_t value){
     model *m=context;unsigned b;enum dcn302_hdmi_register r;m->writes++;bool fail=++m->ops==m->fail_at;
     if(m->dead || (fail && !m->posted) || !locate(m,offset,&b,&r))return false;
-    CHECK(r!=DCN302_HDMI_R_BE && r!=DCN302_HDMI_R_BE_ENABLE && r!=DCN302_HDMI_R_AUDIO_CLOCK && r!=DCN302_HDMI_R_AFMT_POWER);
+    CHECK(r!=DCN302_HDMI_R_BE_ENABLE && r!=DCN302_HDMI_R_AUDIO_CLOCK && r!=DCN302_HDMI_R_AFMT_POWER);
+    if(r==DCN302_HDMI_R_BE)CHECK(!((value^m->regs[b][r])&~DCN302_HDMI_LINK_MODE_MASK));   /* only DIG_MODE (DVI <-> HDMI) may change */
     if(r==DCN302_HDMI_R_AFMT_PACKET && GET(value,CS_UPDATE)){m->cs_updates++;value&=~DCN302_HDMI_CS_UPDATE_MASK;}
     if(r==DCN302_HDMI_R_AFMT_INFO && GET(value,INFO_UPDATE)){m->info_updates++;value&=~DCN302_HDMI_INFO_UPDATE_MASK;}
     if(!m->ignored || m->ignored!=offset)m->regs[b][r]=value;
@@ -145,4 +146,26 @@ static void invalid(void){
         CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)!=DCN302_HDMI_OK && !t.valid && !m.writes);cases++;
     }
 }
-int main(void){normal();io_faults();invalid();printf("{\"passed\":true,\"cases\":%u,\"native_dcn302_hdmi_packets\":true,\"physical_hdmi_audio_verified\":false,\"full_rx6600_driver_complete\":false}\n",cases);return 0;}
+/* UEFI GOP often leaves the TMDS link in DVI mode (2): prepare switches it to HDMI (3), restore gives it back. */
+static void dvi_link(void){
+    model m;dcn302_io io;dcn302_hdmi_transaction t;
+    for(unsigned link=0;link<5;link++){
+        init(&m,&io,link);m.regs[link][DCN302_HDMI_R_BE]=SET(m.regs[link][DCN302_HDMI_R_BE],LINK_MODE,2);memcpy(m.before,m.regs,sizeof(m.regs));
+        CHECK(dcn302_hdmi_prepare(&io,link,link,558100,3,true,0,&t)==DCN302_HDMI_OK && t.mode_changed && GET(m.regs[link][DCN302_HDMI_R_BE],LINK_MODE)==3);
+        CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_OK && !t.mode_changed && GET(m.regs[link][DCN302_HDMI_R_BE],LINK_MODE)==2);restored(&m);cases++;
+    }
+    init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,0,148500,1,true,0,&t)==DCN302_HDMI_OK && !t.mode_changed);cases++;   /* an HDMI link is left alone */
+    for(unsigned mode=0;mode<8;mode++){          /* DP, LVDS, ... are not TMDS: refused without a single write */
+        init(&m,&io,0);m.regs[0][DCN302_HDMI_R_BE]=SET(m.regs[0][DCN302_HDMI_R_BE],LINK_MODE,mode);
+        bool tmds=mode==2 || mode==3;
+        CHECK((dcn302_hdmi_prepare(&io,0,0,148500,1,true,0,&t)==DCN302_HDMI_OK)==tmds && (tmds || !m.writes));cases++;
+    }
+    for(unsigned fail=1;fail<=90;fail++){        /* any single failed access while switching ends with the original mode */
+        init(&m,&io,2);m.regs[2][DCN302_HDMI_R_BE]=SET(m.regs[2][DCN302_HDMI_R_BE],LINK_MODE,2);memcpy(m.before,m.regs,sizeof(m.regs));
+        m.fail_at=fail;enum dcn302_hdmi_error e=dcn302_hdmi_prepare(&io,2,2,558100,3,true,0,&t);
+        m.fail_at=0;
+        if(e==DCN302_HDMI_OK)CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_OK);
+        restored(&m);cases++;
+    }
+}
+int main(void){normal();io_faults();invalid();dvi_link();printf("{\"passed\":true,\"cases\":%u,\"native_dcn302_hdmi_packets\":true,\"physical_hdmi_audio_verified\":false,\"full_rx6600_driver_complete\":false}\n",cases);return 0;}

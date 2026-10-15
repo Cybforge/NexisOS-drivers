@@ -6,7 +6,7 @@
       "version": 2,
       "module_bytes": 12352,
       "package_bytes": 12448,
-      "sha256": "62e50bd4f4bbf0c9487e1d82bcaab4d8396d2a8b1c52558957673aab0eb99ccc",
+      "sha256": "2fc4751ea6ccc0005d628ad338956e65ca1ce9a778c07082d4f42c0f7ea72700",
       "vendor": "1234",
       "devices": [
         "1111"
@@ -18,10 +18,10 @@
     },
     {
       "name": "rx6600",
-      "version": 3,
-      "module_bytes": 290880,
-      "package_bytes": 290976,
-      "sha256": "f1435e2de141269b3f15c65b3ce93caa00b361911220eaeaeeca84a520c3dcc2",
+      "version": 4,
+      "module_bytes": 294976,
+      "package_bytes": 295072,
+      "sha256": "4a74b9b2664ae1c51084afe434c834972d661f8716c392bf9a0c1ce0214e771d",
       "vendor": "1002",
       "devices": [
         "73ff",
@@ -30,7 +30,7 @@
       "title": "AMD Radeon RX 6600 / 6650 XT (Navi23, DCN 3.0.2) HDMI",
       "status": "complete native sequence (clocks, fetch, color path, timing, PLL, SCDC, HDMI, audio endpoint) with rollback; verified against a register MODEL only, not on physical hardware",
       "trial": true,
-      "module_memory_bytes": 655360
+      "module_memory_bytes": 659456
     }
   ]
 }

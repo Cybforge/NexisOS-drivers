@@ -56,9 +56,9 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
     p16(b+80,4);p16(b+100,64);b[102]=2;b[103]=1;p16(b+104+12*2,200);p16(b+104+22*2,400);p16(b+104+27*2,1600);p16(b+104+28*2,600);
     p16(b+600,108);b[602]=2;b[603]=5;b[620]=1;
     p32(b+624,8192);p32(b+628,255);p16(b+634,84);b[637]=0x70;b[638]=8;b[639]=4;
-    p16(b+200,16);b[202]=2;b[203]=1;
-    p16(b+204,dcn302_ddc_gpio_bytes[ddc]/4);b[206]=(uint8_t)bit(dcn302_ddc_clk_mask[ddc]);b[207]=1;b[208]=(uint8_t)(0x90+ddc); /* 6-byte gpio_pin_lut entries */
-    p16(b+210,DCN302_GPIO_HPD_BYTES/4);b[212]=(uint8_t)bit(dcn302_hpd_mask[hpd]);b[213]=b[212];b[214]=5;
+    p16(b+200,20);b[202]=2;b[203]=1;
+    p32(b+204,dcn302_ddc_gpio_bytes[ddc]/4);b[208]=(uint8_t)bit(dcn302_ddc_clk_mask[ddc]);b[209]=1;b[210]=(uint8_t)(0x90+ddc); /* 8-byte gpio_pin_lut entries */
+    p32(b+212,DCN302_GPIO_HPD_BYTES/4);b[216]=(uint8_t)bit(dcn302_hpd_mask[hpd]);b[217]=b[216];b[218]=5;
     p16(b+400,48);b[402]=1;b[403]=4;b[406]=1;p16(b+408,0x310c);p16(b+410,24);
     unsigned encoders[]={0x211e,0x221e,0x2120,0x2220,0x2121};p16(b+412,encoders[link]);p16(b+416,34);p16(b+420,8);
     b[424]=1;b[425]=4;b[426]=(uint8_t)(0x90+ddc);b[428]=2;b[429]=4;b[430]=5;b[431]=1;b[432]=255;

@@ -32,7 +32,12 @@ static uint32_t divider(unsigned did){
 static enum dcn302_dfs_error decode(dcn302_dfs_snapshot *s){
     uint64_t multiplier=((uint64_t)(s->pll&DCN302_DFS_INTEGER_MASK)<<32)|(s->pll&DCN302_DFS_FRACTION_MASK);
     /* CLK02's DFS reference is 100MHz, not the board's HDMI crystal. */
-    s->vco_khz=(uint32_t)((multiplier*100000)>>32);
+    uint64_t vco_q32=multiplier*100000;uint32_t vco=(uint32_t)(vco_q32>>32);s->vco_default=false;
+    /* CLK0_CLK_PLL_REQ is a request register: on the RX 6600 after the video BIOS it read 0x10000001 (about 106 MHz), not a
+     * 3.65 GHz VCO. Linux (dcn30_clk_mgr.c) keeps a default of 3,650,000 kHz for exactly the case that the register holds no
+     * usable multiplier; DISPCLK/DPPCLK dividers of the card (id 76 -> VCO/22 = 166 MHz) agree with that VCO. */
+    if(vco<2500000u || vco>5000000u){vco=3650000u;vco_q32=(uint64_t)vco<<32;multiplier=vco_q32/100000;s->vco_default=true;}
+    s->vco_khz=vco;s->vco_q32=vco_q32;
     unsigned disp=GET(s->dentist,DISP_WRITE),dpp=GET(s->dentist,DPP_WRITE);
     /* Linux (dentist_get_divider_from_did) clamps a divider id below 8 up to 8 instead of treating it as invalid. */
     uint32_t dd=divider(disp<8?8u:disp),pd=divider(dpp<8?8u:dpp);
@@ -112,7 +117,8 @@ enum dcn302_dfs_error dcn302_dfs_prepare(const dcn302_io *io,const dcn302_dfs_re
     memset(t,0,sizeof(*t));
     if(!r)return t->error=DCN302_DFS_INPUT;
     enum dcn302_dfs_error e=dcn302_dfs_read(io,&t->before);if(e)return t->error=e;
-    if(GET(t->before.dentist,MODE))return t->error=DCN302_DFS_UNSUPPORTED;
+    /* DENTIST_DISPCLK_CHG_MODE (bits 16:15) is left exactly as firmware set it: Linux never writes it and reads 2 on the
+     * RX 6600 after the video BIOS / GOP (first hardware log); a divider write keeps these bits. */
     t->request=*r;e=plan(&t->before,r,&t->after);if(e)return t->error=e;
     t->required_disp_floor_mhz=maximum(t->before.disp_floor_mhz,t->after.disp_floor_mhz);
     t->required_dpp_floor_mhz=maximum(t->before.dpp_floor_mhz,t->after.dpp_floor_mhz);
@@ -180,7 +186,7 @@ static enum dcn302_dfs_error program(const dcn302_io *io,uint64_t (*now)(void *)
 static bool usable(const dcn302_io *io,uint64_t (*now)(void *),const dcn302_dfs_transaction *t){
     if(!io || !io->read || !io->write || !io->delay_us || !now || !t || !t->prepared || !t->before.valid || !t->after.valid)return false;
     dcn302_dfs_snapshot before=t->before,after;
-    return !decode(&before) && !memcmp(&before,&t->before,sizeof(before)) && !GET(before.dentist,MODE) &&
+    return !decode(&before) && !memcmp(&before,&t->before,sizeof(before)) &&
         !plan(&before,&t->request,&after) && !memcmp(&after,&t->after,sizeof(after)) &&
         t->required_disp_floor_mhz==maximum(t->before.disp_floor_mhz,after.disp_floor_mhz) && t->required_dpp_floor_mhz==maximum(t->before.dpp_floor_mhz,after.dpp_floor_mhz);
 }

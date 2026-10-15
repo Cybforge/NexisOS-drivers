@@ -97,11 +97,17 @@ static void reject(void){
             case 21:m.dto[0]=(m.dto[0]&~0xff00ffu)|255|(128u<<16);break;
             case 22:io.read=NULL;break;case 23:m.dentist=(m.dentist&~127u)|7;break;case 24:m.dentist=(m.dentist&~DCN302_DFS_DPP_WRITE_MASK)|(7u<<24);break;
         }
+        if(fault==0){   /* no usable PLL multiplier: Linux's 3.65 GHz default VCO */
+            CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_OK && s.vco_default && s.vco_khz==3650000 && s.vco_q32==((uint64_t)3650000<<32) && !m.writes);cases++;continue;
+        }
         if(fault==5 || fault==24){   /* a DPPCLK divider id below 8 is clamped to 8 like Linux does, not rejected */
             CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_OK && s.valid && s.dpp_khz==s.vco_khz*4/8 && !m.writes);cases++;continue;
         }
         memset(&s,0xa5,sizeof(s));CHECK(dcn302_dfs_read(&io,&s)!=DCN302_DFS_OK && !memcmp(&s,&zero,sizeof(s)) && !m.writes);cases++;
     }
+    /* The first real RX 6600 (2026-10-15): PLL_REQ 0x10000001, DENTIST 0x4c194c4c, DTO control 0. */
+    init(&m,&io,&smu);m.pll=0x10000001u;m.dentist=0x4c194c4cu;m.ctrl=0;
+    CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_OK && s.vco_default && s.vco_khz==3650000 && s.disp_khz==3650000u*4/88 && s.dpp_khz==s.disp_khz);cases++;
     for(unsigned n=1;n<=16;n++){init(&m,&io,&smu);m.fail_read=n;CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_IO && !memcmp(&s,&zero,sizeof(s)));cases++;}
     for(unsigned fault=0;fault<11;fault++){
         init(&m,&io,&smu);r=request();
@@ -109,6 +115,9 @@ static void reject(void){
             case 4:r.pipe_khz[4]=0xffffffffu;break;case 5:r.pipe_khz[4]=562000;break;case 6:m.dentist|=1u<<15;break;
             case 7:m.dentist=(m.dentist&~0x7f007f7fu)|127|(127u<<8)|(127u<<24);break;
             case 8:r.disp_khz=0xffffffff;break;case 9:r.dpp_khz=0xffffffff;break;case 10:r.pipe_khz[0]=1000000000;break;}
+        if(fault==6){   /* DENTIST CHG_MODE <> 0 is how the firmware left the real card; Linux never touches it */
+            CHECK(dcn302_dfs_prepare(&io,&r,&t)==DCN302_DFS_OK && t.prepared && !m.writes);cases++;continue;
+        }
         CHECK(dcn302_dfs_prepare(&io,&r,&t)!=DCN302_DFS_OK && !t.prepared && !m.writes);cases++;
     }
     for(unsigned fault=0;fault<33;fault++){

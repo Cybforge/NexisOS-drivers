@@ -14,9 +14,9 @@ static void init(unsigned revision,unsigned count,atom_rom *rom){
     memset(bytes,0,sizeof(bytes));*rom=(atom_rom){bytes,sizeof(bytes),80,100,true};
     p16(80,18);p16(100,64);bytes[102]=2;bytes[103]=1;
     p16(104+12*2,200);p16(104+22*2,400);p16(104+27*2,1600);
-    p16(200,4+6*7);bytes[202]=2;bytes[203]=1;
-    for(unsigned i=0;i<7;i++){
-        p16(204+i*6,0x4000+i*4);bytes[206+i*6]=i;bytes[207+i*6]=i+1;bytes[208+i*6]=(uint8_t)(i<6?0x90+i:5);
+    p16(200,4+8*7);bytes[202]=2;bytes[203]=1;
+    for(unsigned i=0;i<7;i++){   /* Linux struct atom_gpio_pin_assignment: u32 index, bitshift, mask_bitshift, gpio_id, reserved */
+        p32(204+i*8,0x4000+i*4);bytes[208+i*8]=i;bytes[209+i*8]=i+1;bytes[210+i*8]=(uint8_t)(i<6?0x90+i:5);
     }
     p16(400,8+count*40);bytes[402]=1;bytes[403]=(uint8_t)revision;p16(404,0xec8);bytes[406]=(uint8_t)count;
     for(unsigned i=0;i<count;i++){
@@ -49,7 +49,7 @@ static void normal(void){
     for(unsigned i=0;i<7;i++){unsigned phy=99;CHECK(atom_board_phy((uint16_t)ids[i],&phy) && phy==i);cases++;}
     unsigned bad[]={0,0x111e,0x201e,0x231e,0x2225,0x2155};
     for(unsigned i=0;i<6;i++){unsigned phy=99;CHECK(!atom_board_phy((uint16_t)bad[i],&phy) && phy==99);cases++;}
-    init(4,1,&rom);bytes[204+4]=0x01; /* Software GPIO I2C is decoded, not silently upgraded. */
+    init(4,1,&rom);bytes[204+6]=0x01; /* Software GPIO I2C is decoded, not silently upgraded. */
     bytes[records_at(1,0)+2]=0x01;CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_OK && !b.paths[0].ddc_hardware);cases++;
 }
 static void malformed(void){
@@ -62,15 +62,23 @@ static void malformed(void){
           case 6:p16(p+2,8);break;case 7:p16(p+2,48);break;case 8:bytes[r+1]=1;break;
           case 9:bytes[r+1]=25;break;case 10:bytes[r+5]=3;break;case 11:bytes[r+7]=2;break;
           case 12:bytes[r+6]=99;break;case 13:bytes[r+6]=0x90;break;case 14:bytes[r+2]=0x99;break;
-          case 15:bytes[206]=32;break;case 16:bytes[207]=32;break;case 17:p16(204,0);break;
-          case 18:bytes[207]=33;break;case 19:p16(200,4);break;
+          case 15:bytes[208]=32;break;case 16:bytes[209]=32;break;case 17:p32(204,0);break;
+          case 18:bytes[209]=33;break;case 19:p16(200,4);break;
           case 20:p16(1614,0);break;case 21:bytes[1642]=0;break;case 22:bytes[1645]=9;break;
           case 23:p16(p,0x300c);break;case 24:p16(p+4,0x2125);break;
           case 25:bytes[r+11]=5;break;case 26:p16(400,8+16+16);break;
           case 27:bytes[r+8]=1;bytes[r+9]=4;break;case 28:p32(1608,UINT32_MAX);break;
         }
+        if(kind==20 || kind==21 || kind==22 || kind==24 || kind==28){   /* numbers nobody uses (i2c ref, pipe/phy counts, boot clock, phy index): Linux does not range-check them */
+            CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_OK);cases++;continue;
+        }
         memset(&b,0xa5,sizeof(b));CHECK(atom_board_open(&rom,&b)!=ATOM_BOARD_OK);check_empty(&b);cases++;
     }
+    /* A malformed DisplayPort path no longer hides the HDMI path (Linux resolves every connector on its own); a defective HDMI path still fails. */
+    init(4,2,&rom);{unsigned q=records_at(2,1);p16(path_at(1),0x3100+0x100+ATOM_BOARD_DP);bytes[q+2]=0x99;}
+    CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_OK && b.count==1 && b.paths[0].kind==ATOM_BOARD_HDMI);cases++;
+    init(4,2,&rom);{unsigned q=records_at(2,1);bytes[q+2]=0x99;}
+    CHECK(atom_board_open(&rom,&b)!=ATOM_BOARD_OK);check_empty(&b);cases++;
     init(4,2,&rom);p16(path_at(1),0x310c);CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_AMBIGUOUS);check_empty(&b);cases++;
     init(4,1,&rom);p16(path_at(0)+6,0x21ff);CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_OK && b.paths[0].external_encoder==0x21ff);cases++;
     for(unsigned size=0;size<1684;size++){init(4,1,&rom);rom.size=size;CHECK(atom_board_open(&rom,&b)!=ATOM_BOARD_OK);check_empty(&b);cases++;}

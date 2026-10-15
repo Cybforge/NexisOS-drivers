@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v3 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v4 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,39 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Dritter Hardwarelauf (2026-10-15) und Paket v4
+
+Mit dem BAR-Fix kam der Treiber (v3) erstmals über die Aperturprüfung hinaus und stoppte bei „board data of the video BIOS
+(code 2)“. Die Registerübersicht des Abbruchs zeigte den Zustand der Karte nach UEFI/GOP: ein Pfad aktiv (OTG 0, 2200×1125 gesamt,
+Pitch 1920, Fläche bei MC-Adresse 0x80_0000_0000), SMU-Postfach 0/0, `HUBBUB_GLOBAL_TIMER` 0x1002 (wie erwartet),
+DIG-BE 0 im **DVI-Modus (2)** auf HPD 2, `DENTIST` 0x4c194c4c (Teiler-ID 76), `CLK0_CLK_PLL_REQ` 0x10000001. Folgen:
+
+* **Ursache von Code 2 (mein Fehler):** die GPIO-Pin-Tabelle hat 8-Byte-Einträge (`u32 data_a_reg_index`, Linux
+  `struct atom_gpio_pin_assignment`); eine frühere Durchsicht behauptete 6 Byte, das wurde ungeprüft übernommen und
+  ließ die Tabellengrößenprüfung scheitern. Zurückgestellt und diesmal gegen `atomfirmware.h`/`bios_parser2.c` (Linux v6.12) geprüft.
+* **Board-Parser** schlägt nur noch bei einem defekten **HDMI**-Pfad fehl (Linux löst jeden Anschluss einzeln auf); nicht
+  benutzte dce_info-Zahlen werden nicht mehr bereichsgeprüft; bei jedem Abbruch landen die rohen Tabellen (object_info,
+  gpio_pin_lut, dce_info, vram_info) im Log.
+* **DVI-Modus:** UEFI-GOP lässt die TMDS-Verbindung im DVI-Modus. Route akzeptiert 2 und 3; `dcn302_hdmi_prepare` stellt
+  `DIG_MODE` bei ausgeschaltetem Link auf HDMI (3) (Linux `dcn10_link_encoder_setup`) und `restore` stellt DVI wieder her.
+* **DFS:** `DENTIST_DISPCLK_CHG_MODE` ≠ 0 (hier 2) ist normal (Linux fasst es nie an) und wird nicht mehr abgelehnt.
+  `CLK0_CLK_PLL_REQ` ist hier kein nutzbarer Multiplikator (ergäbe ~106 MHz); wie Linux (`dcn30_clk_mgr.c`) wird dann der
+  Standard-VCO 3,65 GHz genommen (Teiler 76 → 166 MHz Display-/DPP-Takt, plausibel). Der Kernel-Log nennt Quelle und Takte.
+* Geprüft mit Modelltests (mit den echten Registerwerten); **nicht** auf Hardware. Weiter ungeprüft: VRAM-Tabelle,
+  Pixeltakt-Messung, SMU-Antworten, der eigentliche Modus-Wechsel.
+
+## Zweiter Hardwarelauf (2026-10-15): die eigentliche Ursache des Abbruchs bei „Retained module initialization rejected (2)“
+
+Mit Paket v3 zeigte das Log: BAR0 (VRAM, 256 MiB) war in Ordnung, die Register-BAR wurde aber mit „BAR does not match the
+UEFI-reported extent“ abgelehnt – dieselbe Meldung wie schon bei v1/v2, die Lockerung der BAR-Größe war also nie die Ursache.
+Ursache liegt im **Kernel, nicht im Modul**: UEFI (EDK2) nummeriert die BAR-*Einträge* des PCI-Headers fortlaufend – ein
+64-Bit-BAR (zwei Konfigurationsregister) und ein I/O-BAR belegen je einen Eintrag. Bei der RX 6600 (BAR0 64-Bit VRAM, BAR2
+64-Bit Doorbell, BAR4 I/O, BAR5 Register) liegen die Register deshalb unter UEFI-Eintrag 3, der Kernel suchte sie unter
+Registernummer 5 und fand „0 + 0“. `gpu_pci_firmware_ranges` (`kernel/drivers/gpu/pci_resource.c`) übersetzt jetzt Einträge
+in Registernummern (mit Rückfall auf Firmware, die nach Registernummer indiziert; der Eintrag muss immer zur live
+gelesenen BAR-Adresse passen). Getestet mit den echten Werten aus dem Log (`tests/host/test_gpu_resource.c`). Dadurch
+kommt der Treiber erstmals weiter als bis zur Aperturprüfung – **alle Schritte danach sind weiterhin ungeprüft auf echter Hardware.**
 
 ## Paket v3 (2026-10-15): zweite Fehlersuche vor dem nächsten Hardwarelauf
 

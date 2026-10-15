@@ -77,6 +77,8 @@ static void rejected(void){
         }
         memset(&r,0xa5,sizeof(r));CHECK(dcn302_route_find(&io,&b,1920,1080,&r)!=DCN302_ROUTE_OK && !memcmp(&r,&zero,sizeof(r)) && !m.invalid);cases++;
     }
+    init(&m,&io,&b,4,0,3,2,1);m.dig[4][DCN302_HDMI_R_BE]=HS(m.dig[4][DCN302_HDMI_R_BE],LINK_MODE,2);   /* DVI mode (what UEFI GOP leaves on the RX 6600) is accepted */
+    CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK);cases++;
     init(&m,&io,&b,4,0,3,2,1);m.dig[4][DCN302_HDMI_R_BE]=HS(m.dig[4][DCN302_HDMI_R_BE],HPD,6);   /* firmware left another DIG_HPD_SELECT: the board's pin is used */
     CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK && r.hpd==1);cases++;
     init(&m,&io,&b,4,0,3,2,1);m.hpd[1]=DCN302_HPD_DELAYED_MASK;CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_ABSENT);cases++;

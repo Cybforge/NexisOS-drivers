@@ -13,8 +13,34 @@ static void put(unsigned n,uint64_t address,uint64_t size,bool wide,bool prefetc
 }
 static bool decode(unsigned n,nexis_gpu_resource *out){return gpu_pci_resource_decode(raw,base,bytes,n,out);}
 static void rejected(unsigned n){nexis_gpu_resource r,zero={0};memset(&r,0xa5,sizeof(r));CHECK(!decode(n,&r) && !memcmp(&r,&zero,sizeof(r)));cases++;}
+/* The real RX 6600 from the first hardware log (2026-10-15): BAR0 64-bit VRAM, BAR2 64-bit doorbell, BAR4 I/O ports, BAR5
+ * registers. UEFI reported the extents by its BAR entry (0 = VRAM, 1 = doorbell, 2 = I/O, 3 = registers). */
+static void real_card(void){
+    const uint32_t config[6]={0xe000000c,0x7f,0xf000000c,0x7f,0xe001,0xfca00000};
+    const uint64_t eb[6]={0x7fe0000000ULL,0x7ff0000000ULL,0,0xfca00000ULL,0,0},eby[6]={0x10000000ULL,0x200000ULL,0,0x100000ULL,0,0};
+    uint64_t b[6],s[6];nexis_gpu_resource r;
+    gpu_pci_firmware_ranges(config,eb,eby,b,s);
+    CHECK(b[0]==0x7fe0000000ULL && s[0]==0x10000000ULL && b[2]==0x7ff0000000ULL && s[2]==0x200000ULL && b[5]==0xfca00000ULL && s[5]==0x100000ULL);
+    CHECK(!b[1] && !b[3] && !b[4]);
+    CHECK(gpu_pci_resource_decode(config,b,s,0,&r) && r.base==0x7fe0000000ULL && r.bytes==0x10000000ULL && r.flags==7);
+    CHECK(gpu_pci_resource_decode(config,b,s,2,&r) && r.base==0x7ff0000000ULL && r.bytes==0x200000ULL);
+    CHECK(gpu_pci_resource_decode(config,b,s,5,&r) && r.base==0xfca00000ULL && r.bytes==0x100000ULL && r.flags==1);
+    CHECK(!gpu_pci_resource_decode(config,b,s,1,&r) && !gpu_pci_resource_decode(config,b,s,3,&r) && !gpu_pci_resource_decode(config,b,s,4,&r));
+    /* The old reading (extents by config register) finds nothing at BAR5; the translation must not depend on it. */
+    CHECK(!gpu_pci_resource_decode(config,eb,eby,5,&r));cases++;
+    /* A firmware that indexes by config register number is still accepted. */
+    const uint64_t rb[6]={0x7fe0000000ULL,0,0x7ff0000000ULL,0,0,0xfca00000ULL},rby[6]={0x10000000ULL,0,0x200000ULL,0,0,0x100000ULL};
+    gpu_pci_firmware_ranges(config,rb,rby,b,s);
+    CHECK(gpu_pci_resource_decode(config,b,s,5,&r) && r.base==0xfca00000ULL && gpu_pci_resource_decode(config,b,s,2,&r));cases++;
+    /* A wrong extent is never accepted: the entry base must equal the live BAR address. */
+    uint64_t bad[6]={eb[0],eb[1],0,eb[3]+4096,0,0};
+    gpu_pci_firmware_ranges(config,bad,eby,b,s);
+    CHECK(!gpu_pci_resource_decode(config,b,s,5,&r));cases++;
+    gpu_pci_firmware_ranges(NULL,eb,eby,b,s);CHECK(!b[0] && !s[5]);cases++;
+}
 int main(void){
     nexis_gpu_resource r;
+    real_card();
     for(unsigned n=0;n<6;n++)for(unsigned wide=0;wide<2;wide++)for(unsigned pf=0;pf<2;pf++)for(unsigned size=12;size<=33;size++){
         clear();uint64_t address=wide?0x2000000000ULL:0x80000000ULL,length=1ULL<<size;
         put(n,address,length,wide!=0,pf!=0);

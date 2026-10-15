@@ -32,3 +32,18 @@ bool gpu_pci_resource_decode(const uint32_t raw[6],const uint64_t base[6],const 
     }
     *out=result;return true;
 }
+void gpu_pci_firmware_ranges(const uint32_t raw[6],const uint64_t entry_base[6],const uint64_t entry_bytes[6],uint64_t base[6],uint64_t bytes[6]){
+    for(unsigned n=0;n<6;n++){base[n]=0;bytes[n]=0;}
+    if(!raw || !entry_base || !entry_bytes)return;
+    unsigned entry=0;
+    for(unsigned n=0;n<6 && entry<6;entry++){
+        uint32_t low=raw[n];
+        if(low&1){n++;continue;}                      /* I/O BAR: takes an entry, carries no memory extent */
+        unsigned type=(low>>1)&3;bool wide=type==2 && n<5;
+        uint64_t address=low&~15u;if(wide)address|=(uint64_t)raw[n+1]<<32;
+        if(address && entry_base[entry]==address){base[n]=entry_base[entry];bytes[n]=entry_bytes[entry];}
+        else if(address && entry_base[n]==address){base[n]=entry_base[n];bytes[n]=entry_bytes[n];}   /* register-indexed firmware */
+        else{base[n]=entry_base[entry];bytes[n]=entry_bytes[entry];}                                  /* let decode report the mismatch */
+        n+=wide?2:1;
+    }
+}
