@@ -16,6 +16,12 @@ typedef struct {uint32_t features;uint16_t frequency_mhz[DCN302_SMU_MAX_LEVELS];
 typedef struct {
     dcn302_io io;uint64_t (*time_us)(void *);
     uint32_t version;bool ready,busy,poisoned,dispatched;
+    /* absent: the very first command was never answered (response register stayed 0 for 2 s). The power-management
+     * firmware of a card that was only POSTed by the video BIOS does not service the DAL mailbox yet. Linux then keeps
+     * smu_present=false and skips ALL clock management (dcn30_clk_mgr.c); so does this driver: no further command is ever
+     * sent, the display clocks stay as the BIOS left them, and the memory/fabric/PHY clocks are replaced by conservative
+     * stand-ins installed with dcn302_smu_assume() (see rx6600.c, which logs them). */
+    bool absent;
     enum dcn302_smu_error error;
     /* Raw replies kept for diagnosis (logged by the owner on any failure). Header and driver-interface numbers are
      * only reported: Linux reads them and ignores a mismatch (dcn30_clk_mgr: "TODO: Check we get what we expect"). */
@@ -28,6 +34,16 @@ typedef struct {
  * SMU/header/driver protocol versions. Does not reset SMU or load firmware.
  * These queries write the mailbox, but do not change clock/power policy. */
 bool dcn302_smu_open(dcn302_smu *,const dcn302_io *,uint64_t (*time_us)(void *));
+/* A usable power-management state: either a working mailbox or the documented "absent" mode above. */
+static inline bool dcn302_smu_usable(const dcn302_smu *s){return s && (s->ready || s->absent) && !s->poisoned;}
+/* Absent mode only: stand-in level for one clock (a single level, floor "known" = assumed). Never talks to hardware. */
+bool dcn302_smu_assume(dcn302_smu *,enum dcn302_smu_clock,uint32_t mhz);
+/* Read-only diagnosis of the other PMFW mailbox (amdgpu "swsmu", C2PMSG_66/82/90): sends GetSmuVersion only. Returns true
+ * when the firmware answered OK. *response is the last response register value (0 = no answer). */
+#define DCN302_PMFW_MESSAGE_BYTES (0x16282u*4u)
+#define DCN302_PMFW_ARGUMENT_BYTES (0x16292u*4u)
+#define DCN302_PMFW_RESPONSE_BYTES (0x1629au*4u)
+bool dcn302_pmfw_version(const dcn302_io *,uint64_t (*time_us)(void *),uint32_t *response,uint32_t *version);
 bool dcn302_smu_clock_limits(dcn302_smu *,enum dcn302_smu_clock,dcn302_smu_limits *);
 /* Actual native SetHardMinByFreq, MHz, with acknowledged configured floor.
  * This is NOT a measured display/DPP/PHY clock or complete modeset. Parent

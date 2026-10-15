@@ -1,5 +1,6 @@
 #include "rx6600.h"
 #include "../common/nxlog.h"
+#include "../common/cta_audio.h"
 #include <string.h>
 static bool read_reg(void *context,uint32_t offset,uint32_t *value){
     rx6600_state *s=context;return s->services->read32(s->services->service_context,5,offset,value);
@@ -85,7 +86,7 @@ static bool fixed_rate(rx6600_state *s){
 static enum rx6600_error prove(rx6600_state *s){
     const nexis_gpu_services *k=s->services;dcn302_route route;dcn302_surface surface;
     if(!resources(s))return RX6600_RESOURCE;
-    if(!s->smu.ready || s->smu.poisoned)return RX6600_SMU;
+    if(!dcn302_smu_usable(&s->smu))return RX6600_SMU;
     dcn302_dfs_snapshot dfs;
     if(dcn302_dfs_read(&s->io,&dfs) || memcmp(&s->dfs,&dfs,sizeof(dfs)))return RX6600_CLOCK;
     dcn302_reference ref;
@@ -132,7 +133,7 @@ done:
 }
 static bool dpp_guard(void *context){
     rx6600_state *s=context;dcn302_dfs_snapshot current;
-    if(!s || !s->services || !resources(s) || !s->smu.ready || s->smu.busy || s->smu.poisoned ||
+    if(!s || !s->services || !resources(s) || !dcn302_smu_usable(&s->smu) || s->smu.busy ||
        dcn302_dfs_read(&s->io,&current) || memcmp(&current,&s->hubp_clock_target,sizeof(current)))return false;
     const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
     for(unsigned n=0;n<4;n++)if(!s->hubp_floor_mhz[n] || !s->smu.floor_known[clocks[n]] || s->smu.floor_mhz[clocks[n]]<s->hubp_floor_mhz[n])return false;
@@ -156,7 +157,7 @@ static bool firmware_fault(rx6600_state *s,enum atom_vm_error e){
 /* Baseline = every transaction is back at (or was never moved from) the original hardware state. The guarded
  * firmware path then only needs the parent proofs that do not depend on installed new-mode registers. */
 bool rx6600_baseline_clean(rx6600_state *s){
-    if(!s || !s->services || !resources(s) || !s->smu.ready || s->smu.busy || s->smu.poisoned)return false;
+    if(!s || !s->services || !resources(s) || !dcn302_smu_usable(&s->smu) || s->smu.busy)return false;
     if(s->hubp_transaction.dirty || s->hubp_transaction.applied || s->hubp_transaction.poisoned ||
        s->hubbub_transaction.dirty || s->hubbub_transaction.applied || s->hubbub_transaction.poisoned ||
        s->dpp_transaction.dirty || s->dpp_transaction.applied || s->dpp_transaction.poisoned ||
@@ -345,7 +346,7 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
     }
     else{
         dcn302_dfs_snapshot current;
-        if(!s->smu.ready || s->smu.busy || s->smu.poisoned || dcn302_dfs_read(&s->io,&current) ||
+        if(!dcn302_smu_usable(&s->smu) || s->smu.busy || dcn302_dfs_read(&s->io,&current) ||
            memcmp(&current,&s->hubp_clock_target,sizeof(current)))e=DCN302_HUBP_READBACK;
         const unsigned clocks[]={DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_SOCCLK,DCN302_SMU_PHYCLK};
         for(unsigned n=0;n<4;n++)if(!s->smu.floor_known[clocks[n]] || s->smu.floor_mhz[clocks[n]]<s->hubp_floor_mhz[n])e=DCN302_HUBP_READBACK;
@@ -372,7 +373,9 @@ static void dump_one(rx6600_state *s,const char *name,uint32_t offset){
 static void dump_registers(rx6600_state *s){
     nx_logf("rx6600: --- register dump after the failed probe ---");
     dump_one(s,"FB_BASE",DCN302_FB_BASE_BYTES);dump_one(s,"FB_TOP",DCN302_FB_TOP_BYTES);dump_one(s,"FB_OFFSET",DCN302_FB_OFFSET_BYTES);
-    dump_one(s,"SMU_ARGUMENT",DCN302_SMU_ARGUMENT_BYTES);dump_one(s,"SMU_RESPONSE",DCN302_SMU_RESPONSE_BYTES);
+    dump_one(s,"SMU_ARGUMENT",DCN302_SMU_ARGUMENT_BYTES);dump_one(s,"SMU_RESPONSE",DCN302_SMU_RESPONSE_BYTES);dump_one(s,"SMU_MESSAGE",DCN302_SMU_MESSAGE_BYTES);
+    dump_one(s,"PMFW_MESSAGE(C2PMSG_66)",DCN302_PMFW_MESSAGE_BYTES);dump_one(s,"PMFW_ARGUMENT(C2PMSG_82)",DCN302_PMFW_ARGUMENT_BYTES);dump_one(s,"PMFW_RESPONSE(C2PMSG_90)",DCN302_PMFW_RESPONSE_BYTES);
+    dump_one(s,"MP1_C2PMSG_35",(0x16000u+0x263u)*4u);dump_one(s,"MP1_C2PMSG_81",(0x16000u+0x291u)*4u);
     dump_one(s,"DFS_PLL",DCN302_DFS_PLL_BYTES);dump_one(s,"DFS_DENTIST",DCN302_DFS_DENTIST_BYTES);dump_one(s,"DFS_DTO_CTRL",DCN302_DFS_DTO_CTRL_BYTES);
     dump_one(s,"HUBBUB_REFCLK_CNTL",DCN302_HUBBUB_REF_BYTES);dump_one(s,"HUBBUB_GLOBAL_TIMER",DCN302_HUBBUB_TIMER_BYTES);
     for(unsigned p=0;p<5;p++){   /* everything the scan-out surface check reads, so one capture shows which condition fails */
@@ -480,11 +483,31 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
             (unsigned)s->smu.error,s->smu.raw_test,s->smu.version,s->smu.raw_response);
         return fail(s,RX6600_SMU);
     }
+    if(s->smu.absent){
+        /* The first real RX 6600 never answered the DAL mailbox (run 8). Linux then runs with smu_present=false and does no clock
+         * management at all; this driver does the same and keeps everything the video BIOS set up. The other PMFW mailbox is
+         * asked once for its version so the next log shows whether the firmware is alive at all. */
+        uint32_t response,version;
+        const bool alive_pmfw=dcn302_pmfw_version(&s->io,now,&response,&version);
+        nx_logf("rx6600: power management: the SMU does not answer the DAL mailbox (response 0x%x); PMFW driver mailbox %s (response 0x%x, version 0x%x)",
+            s->smu.raw_response,alive_pmfw?"answers":"is silent too",response,version);
+        /* Display clocks stay exactly as found: their voltage floor is what the BIOS state already runs at. Memory, fabric and PHY
+         * clocks cannot be read back, so the bandwidth model gets the LOWEST plausible level of each (more latency, larger
+         * watermarks: the safe direction). They are stand-ins, not measurements. */
+        const struct {enum dcn302_smu_clock clock;uint32_t mhz;} assumed[]={
+            {DCN302_SMU_SOCCLK,RX6600_ASSUMED_SOCCLK_MHZ},{DCN302_SMU_UCLK,RX6600_ASSUMED_UCLK_MHZ},{DCN302_SMU_DCEFCLK,RX6600_ASSUMED_DCEFCLK_MHZ},
+            {DCN302_SMU_DISPCLK,s->dfs.disp_floor_mhz},{DCN302_SMU_DPPCLK,s->dfs.dpp_floor_mhz},{DCN302_SMU_PHYCLK,RX6600_ASSUMED_PHYCLK_MHZ}};
+        for(unsigned n=0;n<6;n++)if(!dcn302_smu_assume(&s->smu,assumed[n].clock,assumed[n].mhz)){
+            nx_logf("rx6600: probe stopped at: stand-in clock %u MHz for clock %u",assumed[n].mhz,(unsigned)assumed[n].clock);return fail(s,RX6600_SMU);
+        }
+        nx_logf("rx6600: no clock management: DISPCLK %u / DPPCLK %u MHz stay as the BIOS set them; assumed SOC %u, memory %u, DCF %u, PHY %u MHz",
+            s->dfs.disp_floor_mhz,s->dfs.dpp_floor_mhz,RX6600_ASSUMED_SOCCLK_MHZ,RX6600_ASSUMED_UCLK_MHZ,RX6600_ASSUMED_DCEFCLK_MHZ,RX6600_ASSUMED_PHYCLK_MHZ);
+    }
     if(s->smu.header_mismatch || s->smu.interface_mismatch)
         nx_logf("rx6600: note: SMU header version %u (expected 1), driver interface 0x%x (expected 0x%x); continuing like Linux",
             s->smu.raw_header,s->smu.raw_interface,(unsigned)DCN302_SMU_INTERFACE);
     const enum dcn302_smu_clock clocks[]={DCN302_SMU_SOCCLK,DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_DISPCLK,DCN302_SMU_DPPCLK,DCN302_SMU_PHYCLK};
-    for(unsigned n=0;n<6;n++){
+    for(unsigned n=0;n<6 && !s->smu.absent;n++){
         dcn302_smu_limits limits;
         if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits)){
             nx_logf("rx6600: probe stopped at: SMU clock limits for clock %u (SMU clock id %u, error %u, response 0x%x, value 0x%x)",
@@ -532,15 +555,35 @@ bool rx6600_read_mode(rx6600_state *s,nexis_gpu_scanout *out){
     out->flags=NEXIS_GPU_SCANOUT_ACTIVE|NEXIS_GPU_SCANOUT_HDMI|NEXIS_GPU_SCANOUT_CLOCK_MEASURED|(s->audio_active?NEXIS_GPU_SCANOUT_AUDIO:0);
     s->busy=false;return true;
 }
+bool rx6600_is_running_mode(const rx6600_state *s,const nexis_gpu_timing *t){
+    if(!s || !t || !t->pixel_khz)return false;
+    nexis_gpu_timing shape=*t;shape.pixel_khz=0;
+    uint32_t clock=s->clock.pixel_khz;
+    uint32_t difference=clock>t->pixel_khz?clock-t->pixel_khz:t->pixel_khz-clock;
+    return !memcmp(&shape,&s->route.shape,sizeof(shape)) && (uint64_t)difference*1000000<=(uint64_t)t->pixel_khz*1000;
+}
+uint32_t rx6600_max_pixel_khz(const rx6600_state *s){
+    uint32_t limit=s->route.max_tmds_khz;
+    if(!s->smu.absent)return limit;
+    /* Display and DPP clocks stay at the video BIOS values: one pixel per clock plus the model's down-spread and ramp margin
+     * (about 2 %) leave this much; a 5 % reserve keeps the bandwidth model from refusing a mode the kernel then insists on. */
+    uint32_t clock=s->dfs.disp_khz<s->dfs.dpp_khz?s->dfs.disp_khz:s->dfs.dpp_khz;
+    uint32_t carried=(uint32_t)((uint64_t)clock*100/105);
+    if(carried<s->clock.pixel_khz)carried=s->clock.pixel_khz;
+    return carried<limit?carried:limit;
+}
 bool rx6600_set_mode(rx6600_state *s,const nexis_gpu_timing *t){
     nexis_gpu_scanout current;
     if(!t || !rx6600_read_mode(s,&current))return false;
-    nexis_gpu_timing shape=*t;shape.pixel_khz=0;
-    uint32_t clock=current.timing.pixel_khz;
-    uint32_t difference=clock>t->pixel_khz?clock-t->pixel_khz:t->pixel_khz-clock;
-    if(t->pixel_khz && !memcmp(&shape,&s->route.shape,sizeof(shape)) && (uint64_t)difference*1000000<=(uint64_t)t->pixel_khz*1000){
-        /* The hardware already runs exactly this measured mode. */
-        s->error=RX6600_OK;return true;
+    if(rx6600_is_running_mode(s,t)){
+        /* The hardware already runs exactly this measured mode. Audio is only set up by the full native sequence, so an
+         * unchanged mode still goes through it once when the monitor can play sound and nothing has done so yet. */
+        bool audio=false;
+        if(!s->audio_active && !s->audio_tried && s->services->edid && s->services->edid_bytes){
+            nx_audio_caps caps;audio=nx_audio_caps_from_edid(s->services->edid,s->services->edid_bytes,&caps) && nx_audio_caps_stereo48(&caps);
+        }
+        if(!audio){s->error=RX6600_OK;return true;}
+        nx_logf("rx6600: unchanged mode: running the native sequence once to set up HDMI audio");
     }
     return rx6600_modeset(s,t);
 }
@@ -589,7 +632,7 @@ void rx6600_poll(rx6600_state *s){
         if(t<s->hpd_lost_us || t-s->hpd_lost_us>3000000)fail(s,RX6600_ROUTE);
     }else fail(s,RX6600_ROUTE);
     if(!s->ready){}
-    else if(!s->smu.ready || s->smu.poisoned)fail(s,RX6600_SMU);
+    else if(!dcn302_smu_usable(&s->smu))fail(s,RX6600_SMU);
     else if(!fixed_rate(s) || !alive(s))fail(s,RX6600_CLOCK);
     s->busy=false;
 }

@@ -20,6 +20,7 @@ typedef struct {
     uint32_t firmware_regs[4];unsigned firmware_reads,firmware_writes;
     unsigned firmware_read_loss,time_fault,delays,fail_delay;
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
+    bool smu_dead;unsigned pmfw_writes;uint32_t pmfw[3];
     uint64_t time;unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
     unsigned fail_mmio_write,ignore_mmio_write,activate_mmio_write,hubbub_writes,hubp_writes,timing_writes,dpp_writes,loss_mmio_write,loss_kind;
     bool posted;
@@ -67,6 +68,10 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
         return true;
     }
     if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
+    if(offset==DCN302_PMFW_MESSAGE_BYTES || offset==DCN302_PMFW_ARGUMENT_BYTES || offset==DCN302_PMFW_RESPONSE_BYTES){   /* other PMFW mailbox: silent */
+        *out=offset==DCN302_PMFW_MESSAGE_BYTES?m->pmfw[0]:offset==DCN302_PMFW_ARGUMENT_BYTES?m->pmfw[1]:m->pmfw[2];return true;
+    }
+    if(offset==(0x16000u+0x263u)*4u || offset==(0x16000u+0x291u)*4u || offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}   /* diagnostic dump only */
     if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
     if(offset==DCN302_HUBBUB_REF_BYTES){*out=m->reference;return true;}
     if(offset==DCN302_HUBBUB_TIMER_BYTES){*out=m->timer;return true;}
@@ -92,9 +97,13 @@ static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *o
 static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
     model *m=ctx;CHECK(bar==5);
     if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
+    if(offset==DCN302_PMFW_MESSAGE_BYTES){m->pmfw_writes++;m->pmfw[0]=value;return true;}
+    if(offset==DCN302_PMFW_ARGUMENT_BYTES){m->pmfw_writes++;m->pmfw[1]=value;return true;}
+    if(offset==DCN302_PMFW_RESPONSE_BYTES){m->pmfw_writes++;m->pmfw[2]=value;return true;}
     if(offset==DCN302_SMU_ARGUMENT_BYTES){m->smu_writes++;m->smu_argument=value;return true;}
     if(offset==DCN302_SMU_MESSAGE_BYTES){
-        m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);unsigned clock=m->smu_argument>>16,index=m->smu_argument&0xff;
+        m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);if(m->smu_dead)return true;   /* nobody listens: response stays 0 */
+        unsigned clock=m->smu_argument>>16,index=m->smu_argument&0xff;
         uint32_t result=0;
         if(m->smu_status==1)switch(value){
             case 1:result=m->smu_argument+1;break;case 2:result=m->smu_version;break;
@@ -356,6 +365,36 @@ static void real_card(void){
     CHECK(s.route.link==0 && s.route.stream==0 && s.route.otg==0 && s.route.hpd==2 && s.surface.hubp==0 && s.surface.pitch==1920);
     CHECK(s.dfs.vco_default && s.dfs.vco_khz==3650000 && s.clock.pixel_khz>148000 && s.clock.pixel_khz<149000);
     CHECK(rx6600_read_mode(&s,&out) && out.framebuffer==0x7fe0000000ULL && out.pitch==1920 && out.timing.hactive==1920 && out.timing.vactive==1080);
+    rx6600_shutdown(&s);cases++;
+}
+/* The second real-card run: the power-management firmware never answers the DAL mailbox. Linux then runs without clock management
+ * (smu_present=false); the driver must do the same, never touch that mailbox again, and still plan with the clocks the BIOS left. */
+static void dead_smu(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    real_card_init(&m,&k);m.smu_dead=true;
+    enum rx6600_error e=rx6600_probe(&s,&k);
+    if(e)fprintf(stderr,"dead-SMU probe error %u\n",(unsigned)e);
+    CHECK(e==RX6600_OK && s.ready && s.smu.absent && !s.smu.ready && dcn302_smu_usable(&s.smu) && !m.writes && !m.invalid);
+    CHECK(m.smu_triggers==1 && m.pmfw_writes==3);   /* one unanswered test message, one read-only PMFW version query */
+    CHECK(s.smu.floor_known[DCN302_SMU_DISPCLK] && s.smu.floor_mhz[DCN302_SMU_DISPCLK]==s.dfs.disp_floor_mhz && s.smu.floor_mhz[DCN302_SMU_DPPCLK]==s.dfs.dpp_floor_mhz);
+    CHECK(s.smu.floor_mhz[DCN302_SMU_UCLK]==RX6600_ASSUMED_UCLK_MHZ && s.smu.floor_mhz[DCN302_SMU_SOCCLK]==RX6600_ASSUMED_SOCCLK_MHZ &&
+          s.smu.floor_mhz[DCN302_SMU_DCEFCLK]==RX6600_ASSUMED_DCEFCLK_MHZ && s.smu.floor_mhz[DCN302_SMU_PHYCLK]==RX6600_ASSUMED_PHYCLK_MHZ);
+    CHECK(rx6600_read_mode(&s,&out) && out.timing.hactive==1920 && out.timing.vactive==1080);
+    /* The kernel may only ask for what the BIOS display clocks (about 166 MHz) can carry: the running 148.5 MHz mode, nothing faster. */
+    uint32_t cap=rx6600_max_pixel_khz(&s);
+    CHECK(cap>=s.clock.pixel_khz && cap<=s.dfs.disp_khz && cap<s.route.max_tmds_khz);
+    /* The bandwidth model accepts the running mode with the stand-in clocks ... */
+    dcn302_dml_output plan;nexis_gpu_timing now_mode=out.timing;
+    CHECK(s.bandwidth_plan(&s,&now_mode,false,&plan) && plan.vstartup && plan.disp_khz<=s.dfs.disp_khz && plan.dpp_khz<=s.dfs.dpp_khz && s.ready);
+    /* ... and refuses the monitor's 240 Hz mode (558 MHz cannot go through a 166 MHz pipe), without failing the driver. */
+    nexis_gpu_timing fast={.hactive=1920,.hsync_start=1968,.hsync_end=2000,.htotal=2080,.vactive=1080,.vsync_start=1083,.vsync_end=1088,.vtotal=1118,.flags=out.timing.flags,.pixel_khz=558195};
+    CHECK(!s.bandwidth_plan(&s,&fast,false,&plan) && s.ready);
+    /* Floors can only be confirmed, never raised, and nothing reaches the mailbox. */
+    uint32_t got;
+    CHECK(s.clock_floor(&s,DCN302_SMU_UCLK,RX6600_ASSUMED_UCLK_MHZ,&got) && got==RX6600_ASSUMED_UCLK_MHZ);
+    CHECK(!s.clock_floor(&s,DCN302_SMU_UCLK,RX6600_ASSUMED_UCLK_MHZ+1,&got) && !got && s.ready && m.smu_triggers==1 && !m.writes);
+    CHECK(!s.clock_floor(&s,DCN302_SMU_DISPCLK,s.dfs.disp_floor_mhz+1,&got) && !got && m.smu_triggers==1);
+    m.time+=500000;rx6600_poll(&s);CHECK(s.ready && rx6600_read_mode(&s,&out) && !m.invalid);
     rx6600_shutdown(&s);cases++;
 }
 typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
@@ -936,5 +975,5 @@ static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsig
     for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==12);real_card();normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
+int main(int argc,char **argv){CHECK(argc==12);real_card();dead_smu();normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
     printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"real_pic_bandwidth_plan_executed\":true,\"atom_memory_topology_integrated\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

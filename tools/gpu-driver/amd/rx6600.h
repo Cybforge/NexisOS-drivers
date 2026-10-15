@@ -15,6 +15,13 @@
 #include "dcn302_ddc.h"
 #include "hdmi_scdc.h"
 #include "dcn302_audio.h"
+/* Stand-in levels when the SMU never answers (dcn302_smu.absent): the lowest plausible DPM level of each clock, so the bandwidth model's
+ * latency and watermarks err on the large side. DCFCLK 500 is Linux's own default (dcn302_fpu.c min_dcfclk); the others are the low end of
+ * the RX 6600 tables (memory 96 MHz idle state x16 = 1536 MT/s). They are assumptions, not measurements. */
+#define RX6600_ASSUMED_SOCCLK_MHZ 400u
+#define RX6600_ASSUMED_UCLK_MHZ 96u
+#define RX6600_ASSUMED_DCEFCLK_MHZ 400u
+#define RX6600_ASSUMED_PHYCLK_MHZ 300u
 enum rx6600_dfs_operation {RX6600_DFS_PREPARE,RX6600_DFS_APPLY,RX6600_DFS_RESTORE};
 enum rx6600_hubp_operation {RX6600_HUBP_PREPARE,RX6600_HUBP_BLANK,RX6600_HUBP_APPLY,RX6600_HUBP_RESTORE,RX6600_HUBP_CANCEL};
 enum rx6600_timing_operation {RX6600_TIMING_APPLY,RX6600_TIMING_RESTORE};
@@ -83,6 +90,7 @@ typedef struct {
     bool in_modeset;    /* read_mode/poll stand aside while a mode switch is running */
     bool sequence_proven; /* the full sequence already ran once for the current mode (self-test) */
     bool audio_active;  /* AFMT audio packets are being sent (reported as NEXIS_GPU_SCANOUT_AUDIO) */
+    bool audio_tried;   /* the full sequence (which sets HDMI audio up) already ran once; an unchanged mode is then not redone */
     uint32_t modeset_count;
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
@@ -126,6 +134,11 @@ void rx6600_resample(rx6600_state *);
 /* True when routing/surface/clock proofs still hold (display running, nothing changed behind our back). */
 bool rx6600_still_valid(rx6600_state *);
 bool rx6600_read_mode(rx6600_state *,nexis_gpu_scanout *);
+/* True when the hardware already runs exactly this shape at (about) this measured pixel clock. */
+bool rx6600_is_running_mode(const rx6600_state *,const nexis_gpu_timing *);
+/* Highest pixel clock the kernel may ask for. Normally the connector limit; without power management (smu.absent) only what
+ * the display clocks the video BIOS left can carry (never below the mode that runs now). */
+uint32_t rx6600_max_pixel_khz(const rx6600_state *);
 bool rx6600_set_mode(rx6600_state *,const nexis_gpu_timing *);
 void rx6600_poll(rx6600_state *);
 void rx6600_shutdown(rx6600_state *);

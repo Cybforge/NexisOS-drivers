@@ -160,7 +160,22 @@ static void fault_transactions(void){
     }
     /* A dropped trigger is indistinguishable from a pending command until the
      * bounded timeout. It must never cause another trigger or fake response. */
-    io=init(&m);m.ignore=7;CHECK(!dcn302_smu_open(&s,&io,now) && s.poisoned && s.dispatched && !m.triggers && !m.response && !s.busy);cases++;
+    io=init(&m);m.ignore=7;CHECK(dcn302_smu_open(&s,&io,now) && s.absent && !s.ready && !s.poisoned && s.dispatched && !m.triggers && !m.response && !s.busy && dcn302_smu_usable(&s));cases++;
+    /* Absent mode (nobody answers, like the first real RX 6600): usable, never touches the mailbox again, only confirms assumed levels. */
+    {
+        unsigned ops=m.ops;uint32_t got;dcn302_smu_limits seen;
+        CHECK(!dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&seen) && !seen.valid && !s.poisoned);   /* nothing assumed yet */
+        CHECK(!dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,96,&got) && !got && s.error==DCN302_SMU_UNSUPPORTED && !s.poisoned);
+        CHECK(!dcn302_smu_assume(&s,(enum dcn302_smu_clock)3,100) && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,0) && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,70000));
+        CHECK(dcn302_smu_assume(&s,DCN302_SMU_UCLK,96) && dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&seen) && seen.valid && seen.count==1 && seen.frequency_mhz[0]==96);
+        CHECK(dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,96,&got) && got==96 && s.floor_known[DCN302_SMU_UCLK]);
+        CHECK(dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,50,&got) && got==96);                          /* already satisfied by the assumption */
+        CHECK(!dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,97,&got) && !got && s.error==DCN302_SMU_UNSUPPORTED && !s.poisoned && dcn302_smu_usable(&s));
+        CHECK(!dcn302_smu_set_floor(&s,(enum dcn302_smu_clock)3,10,&got) && !dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,0,&got));
+        CHECK(m.ops==ops && !m.triggers && !m.invalid);   /* not one register access reached the mailbox */
+        cases++;
+    }
+    io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && !s.absent && s.ready && !dcn302_smu_assume(&s,DCN302_SMU_UCLK,96));cases++;   /* a working mailbox never takes stand-ins */
     io=init(&m);CHECK(dcn302_smu_open(&s,&io,now) && dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&limits));unsigned before=m.ops;
     uint32_t actual;CHECK(dcn302_smu_set_floor(&s,DCN302_SMU_UCLK,558,&actual));operations=m.ops-before;
     for(unsigned post=0;post<2;post++)for(unsigned fault=1;fault<=operations;fault++){

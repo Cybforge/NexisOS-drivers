@@ -63,6 +63,7 @@ static bool restore_untriggered(dcn302_smu *s,uint32_t argument,uint32_t respons
 }
 static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out){
     *out=0;
+    if(s->absent)return error(s,DCN302_SMU_PREREQUISITE,false);   /* nothing is ever sent to a mailbox that did not answer */
     if(s->busy || s->poisoned)return error(s,s->busy?DCN302_SMU_BUSY:DCN302_SMU_PROTOCOL,false);
     s->busy=true;s->error=DCN302_SMU_OK;s->dispatched=false;
     uint32_t prior_response,prior_argument,value;
@@ -97,7 +98,13 @@ bool dcn302_smu_open(dcn302_smu *s,const dcn302_io *io,uint64_t (*time_us)(void 
     if(!io || !io->read || !io->write || !io->delay_us || !time_us)return error(s,DCN302_SMU_INPUT,false);
     s->io=*io;s->time_us=time_us;
     uint32_t value;
-    if(!send(s,MSG_TEST,0x4e455849,&value))return false;
+    if(!send(s,MSG_TEST,0x4e455849,&value)){
+        /* Not a single reply: not a protocol fault but "nobody listens" (response register still 0 after the full wait). */
+        if(s->error==DCN302_SMU_TIMEOUT && !s->raw_response){
+            s->absent=true;s->poisoned=false;s->busy=false;s->ready=false;s->error=DCN302_SMU_OK;return true;
+        }
+        return false;
+    }
     s->raw_test=value;
     if(value!=0x4e45584a)return error(s,DCN302_SMU_PROTOCOL,true);
     if(!send(s,MSG_VERSION,0,&value))return false;
@@ -109,9 +116,18 @@ bool dcn302_smu_open(dcn302_smu *s,const dcn302_io *io,uint64_t (*time_us)(void 
     s->raw_interface=value;s->interface_mismatch=value!=DCN302_SMU_INTERFACE;
     s->ready=true;s->error=DCN302_SMU_OK;return true;
 }
+bool dcn302_smu_assume(dcn302_smu *s,enum dcn302_smu_clock clock,uint32_t mhz){
+    if(!s || !s->absent || !supported(clock) || !mhz || mhz>UINT16_MAX)return false;
+    dcn302_smu_limits l={0};l.count=1;l.frequency_mhz[0]=(uint16_t)mhz;l.valid=true;
+    s->clocks[clock]=l;s->floor_known[clock]=true;s->floor_mhz[clock]=(uint16_t)mhz;return true;
+}
 bool dcn302_smu_clock_limits(dcn302_smu *s,enum dcn302_smu_clock clock,dcn302_smu_limits *out){
     if(!out)return false;
     memset(out,0,sizeof(*out));
+    if(s && s->absent){
+        if(!supported(clock) || !s->clocks[clock].valid)return error(s,DCN302_SMU_PREREQUISITE,false);
+        *out=s->clocks[clock];return true;
+    }
     if(!s || !s->ready || !supported(clock))return s?error(s,DCN302_SMU_INPUT,false):false;
     if(s->busy || s->poisoned)return error(s,s->busy?DCN302_SMU_BUSY:DCN302_SMU_PROTOCOL,false);
     /* A failed refresh must not leave stale limits authorizing a setter. */
@@ -135,6 +151,12 @@ bool dcn302_smu_clock_limits(dcn302_smu *s,enum dcn302_smu_clock clock,dcn302_sm
 bool dcn302_smu_set_floor(dcn302_smu *s,enum dcn302_smu_clock clock,uint32_t mhz,uint32_t *out){
     if(!out)return false;
     *out=0;
+    if(s && s->absent){
+        /* Nothing can be raised without power management; only what is already assumed can be confirmed. */
+        if(!supported(clock) || !mhz || mhz>UINT16_MAX)return error(s,DCN302_SMU_INPUT,false);
+        if(!s->floor_known[clock] || mhz>s->floor_mhz[clock])return error(s,DCN302_SMU_UNSUPPORTED,false);
+        *out=s->floor_mhz[clock];return true;
+    }
     if(!s || !s->ready || !supported(clock) || !mhz || mhz>UINT16_MAX)return s?error(s,DCN302_SMU_INPUT,false):false;
     if(s->busy || s->poisoned)return error(s,s->busy?DCN302_SMU_BUSY:DCN302_SMU_PROTOCOL,false);
     const dcn302_smu_limits *limits=&s->clocks[clock];
@@ -148,4 +170,25 @@ bool dcn302_smu_set_floor(dcn302_smu *s,enum dcn302_smu_clock clock,uint32_t mhz
         s->floor_known[clock]=false;return error(s,DCN302_SMU_READBACK,true);
     }
     s->floor_known[clock]=true;s->floor_mhz[clock]=(uint16_t)actual;*out=actual;return true;
+}
+bool dcn302_pmfw_version(const dcn302_io *io,uint64_t (*time_us)(void *),uint32_t *response,uint32_t *version){
+    if(!response || !version)return false;
+    *response=0;*version=0;
+    if(!io || !io->read || !io->write || !io->delay_us || !time_us)return false;
+    uint32_t value;
+    if(!io->write(io->context,DCN302_PMFW_RESPONSE_BYTES,0) || !io->write(io->context,DCN302_PMFW_ARGUMENT_BYTES,0) ||
+       !io->write(io->context,DCN302_PMFW_MESSAGE_BYTES,2))return false;   /* PPSMC_MSG_GetSmuVersion: the first message amdgpu sends */
+    uint64_t start=time_us(io->context);
+    for(unsigned n=0;n<10000;n++){
+        if(!io->read(io->context,DCN302_PMFW_RESPONSE_BYTES,&value))return false;
+        if(value){
+            *response=value;
+            if(value==1 && io->read(io->context,DCN302_PMFW_ARGUMENT_BYTES,&value)){*version=value;return true;}
+            return false;
+        }
+        uint64_t now=time_us(io->context);
+        if(now<start || now-start>200000)break;
+        if(!io->delay_us(io->context,10))return false;
+    }
+    return false;
 }

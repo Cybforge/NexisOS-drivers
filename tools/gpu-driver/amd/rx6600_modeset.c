@@ -138,6 +138,8 @@ static bool step_plan(void *c) {
     uint32_t max_disp = 0, max_dpp = 0;
     if (!smu_max_level(s, DCN302_SMU_DISPCLK, &max_disp) || !smu_max_level(s, DCN302_SMU_DPPCLK, &max_dpp)) return false;
     max_disp *= 1000; max_dpp *= 1000;
+    /* Without power management nothing can raise the voltage: the display and DPP clocks stay exactly as the BIOS left them. */
+    if (s->smu.absent) { max_disp = s->dfs.disp_khz; max_dpp = s->dfs.dpp_khz; }
     /* Display and DPP clocks: start at 115 % of the pixel clock (one pixel per clock, no scaling) and let the
      * AMD bandwidth model (DML) decide; widen until it accepts or the SMU maximum is reached. */
     static const unsigned percent[] = { 115, 130, 150, 175, 200 };
@@ -538,12 +540,16 @@ bool rx6600_modeset(rx6600_state *s, const nexis_gpu_timing *target) {
     /* Reject impossible requests before anything is touched - including the self-test below. */
     if (target->hactive != s->route.shape.hactive || target->vactive != s->route.shape.vactive) { nx_logf("rx6600: resolution changes are not supported"); return false; }
     if (target->pixel_khz < 25000 || target->pixel_khz > s->route.max_tmds_khz) { nx_logf("rx6600: %u kHz outside the connector range 25000..%u", target->pixel_khz, s->route.max_tmds_khz); return false; }
+    const bool unchanged = rx6600_is_running_mode(s, target);
     if (!s->sequence_proven) {
         nexis_gpu_timing same = s->route.shape;
         same.pixel_khz = s->clock.pixel_khz;
         nx_logf("rx6600: self-test: running the full native sequence once for the CURRENT mode first");
         if (!modeset_once(s, &same)) return false;
         s->sequence_proven = true;
+        s->audio_tried = true;
+        if (unchanged) return true; /* the self-test already ran the requested (current) mode, audio included */
     }
+    s->audio_tried = true;
     return modeset_once(s, target);
 }

@@ -192,7 +192,7 @@ static bool usable(const dcn302_io *io,uint64_t (*now)(void *),const dcn302_dfs_
 }
 static bool authorized(const dcn302_io *io,uint64_t (*now)(void *),const dcn302_smu *smu,const dcn302_dfs_transaction *t){
     return smu && smu->io.context==io->context && smu->io.read==io->read && smu->io.write==io->write && smu->io.delay_us==io->delay_us && smu->time_us==now &&
-       smu->ready && !smu->busy && !smu->poisoned && smu->floor_known[DCN302_SMU_DISPCLK] && smu->floor_known[DCN302_SMU_DPPCLK] &&
+       dcn302_smu_usable(smu) && !smu->busy && smu->floor_known[DCN302_SMU_DISPCLK] && smu->floor_known[DCN302_SMU_DPPCLK] &&
        smu->floor_mhz[DCN302_SMU_DISPCLK]>=t->required_disp_floor_mhz && smu->floor_mhz[DCN302_SMU_DPPCLK]>=t->required_dpp_floor_mhz;
 }
 enum dcn302_dfs_error dcn302_dfs_restore_disabled(const dcn302_io *io,uint64_t (*now)(void *),const dcn302_smu *smu,dcn302_dfs_transaction *t){

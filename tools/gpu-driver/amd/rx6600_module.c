@@ -15,7 +15,7 @@ int NEXIS_GPU_CALL driver_init_v2(const nexis_gpu_services *services,nexis_gpu_i
     volatile nexis_gpu_instance *out=instance;
     out->abi=2;out->size=sizeof(*instance);out->state=&state;out->state_bytes=sizeof(state);
     out->name="AMD Radeon RX 6600 (native HDMI)";
-    out->max_pixel_khz=state.route.max_tmds_khz;out->max_tmds_khz=state.route.max_tmds_khz;
+    out->max_pixel_khz=rx6600_max_pixel_khz(&state);out->max_tmds_khz=state.route.max_tmds_khz;
     out->hdmi=true;out->scdc=true;
     out->read_mode=read_mode;out->set_mode=set_mode;out->poll=poll;out->shutdown=shutdown;
     return 0;

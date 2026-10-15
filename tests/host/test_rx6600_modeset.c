@@ -32,6 +32,7 @@ typedef struct {
     uint32_t dpp[5][DCN302_DPP_REGISTER_COUNT];
     uint32_t hubbub[DCN302_HUBBUB_REGISTER_COUNT],reference,timer;
     uint32_t smu_argument,smu_response,smu_version,smu_interface,smu_header,smu_features,smu_status,smu_floor;
+    bool smu_dead;unsigned pmfw_writes;uint32_t pmfw[3];
     uint64_t time;
     uint32_t resync[5],pixel_khz,pll_khz;
     uint32_t az_index[6],az[6][0x100],dto[3];
@@ -79,6 +80,10 @@ static uint32_t frame_count(model *m,unsigned i){
 static bool NEXIS_GPU_CALL rd(void *ctx,unsigned bar,uint32_t offset,uint32_t *out){
     model *m=ctx;CHECK(bar==5);if(++m->reads==m->fail_read)return false;
     if(offset==DCN302_SMU_RESPONSE_BYTES){*out=m->smu_response;return true;}
+    if(offset==DCN302_PMFW_MESSAGE_BYTES || offset==DCN302_PMFW_ARGUMENT_BYTES || offset==DCN302_PMFW_RESPONSE_BYTES){   /* other PMFW mailbox: silent */
+        *out=offset==DCN302_PMFW_MESSAGE_BYTES?m->pmfw[0]:offset==DCN302_PMFW_ARGUMENT_BYTES?m->pmfw[1]:m->pmfw[2];return true;
+    }
+    if(offset==(0x16000u+0x263u)*4u || offset==(0x16000u+0x291u)*4u || offset==DCN302_SMU_MESSAGE_BYTES){*out=0;return true;}   /* diagnostic dump only */
     if(offset==DCN302_SMU_ARGUMENT_BYTES){*out=m->smu_argument;return true;}
     if(offset==DCN302_HUBBUB_REF_BYTES){*out=m->reference;return true;}
     if(offset==DCN302_HUBBUB_TIMER_BYTES){*out=m->timer;return true;}
@@ -118,9 +123,13 @@ static bool all_stopped(model *m){
 static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t value){
     model *m=ctx;CHECK(bar==5);
     if(offset==DCN302_SMU_RESPONSE_BYTES){m->smu_writes++;m->smu_response=value;return true;}
+    if(offset==DCN302_PMFW_MESSAGE_BYTES){m->pmfw_writes++;m->pmfw[0]=value;return true;}
+    if(offset==DCN302_PMFW_ARGUMENT_BYTES){m->pmfw_writes++;m->pmfw[1]=value;return true;}
+    if(offset==DCN302_PMFW_RESPONSE_BYTES){m->pmfw_writes++;m->pmfw[2]=value;return true;}
     if(offset==DCN302_SMU_ARGUMENT_BYTES){m->smu_writes++;m->smu_argument=value;return true;}
     if(offset==DCN302_SMU_MESSAGE_BYTES){
-        m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);unsigned clock=m->smu_argument>>16,index=m->smu_argument&0xff;
+        m->smu_writes++;m->smu_triggers++;CHECK(!m->smu_response);if(m->smu_dead)return true;   /* nobody listens: response stays 0 */
+        unsigned clock=m->smu_argument>>16,index=m->smu_argument&0xff;
         uint32_t result=0;
         if(m->smu_status==1)switch(value){
             case 1:result=m->smu_argument+1;break;case 2:result=m->smu_version;break;
@@ -498,9 +507,9 @@ static void inject(bool proven){
 /* ---- scenario 0: the owner's real card as the GOP left it (run-3 register dump): 1080p60 CEA (148.5 MHz) in DVI-mode
  * TMDS on DIG link 0 / stream 0 / OTG 0 / HPD index 2, PITCH 0x780, FB_OFFSET 0, PLL_REQ 0x10000001, DENTIST 0x4c194c4c.
  * Firmware commands are the test double; this checks the module's own register paths on the real starting state. */
-static void real_card(void){
+static void real_card(bool dead_smu){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
-    init(&m,&k,0,0,0,1,2,0,0,0,1);
+    init(&m,&k,0,0,0,1,2,0,0,0,1);m.smu_dead=dead_smu;
     m.vram=(nexis_gpu_resource){0x7fe0000000ULL,0x10000000ULL,7,0};m.registers=(nexis_gpu_resource){0xfca00000,0x100000,9,0};
     k.framebuffer=0x7fe0000000ULL;k.pitch=1920;k.framebuffer_bytes=1920u*4*1080;m.fb_offset=0;
     m.smu_argument=0;m.smu_response=0;m.dfs_pll=0x10000001;m.dfs_dentist=0x4c194c4c;m.dfs_control=0;m.reference=0;m.timer=0x1002;
@@ -522,13 +531,27 @@ static void real_card(void){
     CHECK(rx6600_read_mode(&s,&out) && out.timing.htotal==2200 && out.timing.vtotal==1125);
     /* The monitor's 240 Hz timing (as in the EDID of build_edid). */
     nexis_gpu_timing t240={.hactive=1920,.hsync_start=1968,.hsync_end=2000,.htotal=2080,.vactive=1080,.vsync_start=1083,.vsync_end=1088,.vtotal=1118,.flags=out.timing.flags,.pixel_khz=558195};
+    if(dead_smu){
+        /* No clock management (the SMU never answers): the clocks stay as the BIOS left them. The unchanged 1080p60 mode still goes
+         * through the native sequence once (HDMI audio), the 240 Hz mode is refused in the plan before the screen goes dark. */
+        CHECK(s.smu.absent && m.smu_triggers==1 && !s.audio_active && !s.audio_tried);
+        nexis_gpu_timing running_now=out.timing;
+        CHECK(rx6600_set_mode(&s,&running_now) && s.ready && s.sequence_proven && s.audio_tried && s.audio_active && running0(&m) && ppm_close(m.pixel_khz,148500));
+        CHECK(m.dfs_dentist==0x4c194c4c && m.smu_triggers==1 && !m.invalid);   /* dividers untouched, mailbox silent */
+        CHECK(rx6600_read_mode(&s,&out) && (out.flags&NEXIS_GPU_SCANOUT_AUDIO) && nexis_gpu_mode_readback_matches(&out,&running_now));
+        unsigned triggers=m.smu_triggers,writes=m.writes;
+        CHECK(rx6600_set_mode(&s,&running_now) && m.writes==writes);   /* nothing is redone once audio was set up */
+        CHECK(!rx6600_set_mode(&s,&t240) && s.ready && running0(&m) && ppm_close(m.pixel_khz,148500) && m.dfs_dentist==0x4c194c4c && m.smu_triggers==triggers && !m.invalid);
+        CHECK(rx6600_read_mode(&s,&out) && nexis_gpu_mode_readback_matches(&out,&running_now));cases++;
+        return;
+    }
     bool ok=rx6600_set_mode(&s,&t240);
     if(!ok)fprintf(stderr,"real-card switch to 240 Hz failed, error %u\n",(unsigned)s.error);
     CHECK(ok && s.ready && running0(&m) && ppm_close(m.pixel_khz,t240.pixel_khz) && m.scdc[0x20]==3 && !m.invalid);
     CHECK(rx6600_read_mode(&s,&out) && nexis_gpu_mode_readback_matches(&out,&t240));cases++;
 }
 int main(void){
-    real_card();switches();no_scdc();inject(true);inject(false);
+    real_card(false);real_card(true);switches();no_scdc();inject(true);inject(false);
     printf("{\"passed\":true,\"cases\":%u,\"failures_restored_with_picture\":%u,\"failures_ended_with_output_off\":%u,\"faulted_switches_that_still_completed_with_audio\":%u,\"switches_completed_video_only_after_audio_fault\":%u,\"modeled_only\":true,\"physical_hardware_verified\":false}\n",cases,restored,switched_off,harmless,video_only);
     return 0;
 }
