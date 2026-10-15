@@ -124,6 +124,23 @@ braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert �
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
 
+## Zehnter Hardwarelauf (2026-10-15) und Paket v11: Rückschritt von v10 behoben
+
+Fotos von v10: `mailbox set 0 (MP1 aperture 0x16000): … alles 00000000`, `mailbox set 1 (MP1 aperture 0x16200): … alles ffffffff`. Der Navi23-Adresssatz
+(0x16200, aus Linux `dimgrey_cavefish_ip_offset.h`) wird **von der Karte nicht dekodiert** (nur Einsen), die Vermutung von v10 war falsch. Schlimmer:
+v10 wertete das als Protokollfehler und brach die Probe mit „SMU mailbox (error 5)“ ab – ein Rückschritt gegenüber v9, der Treiber wurde gar nicht erst aktiv.
+
+* **Behoben:** ein Registersatz, dessen Antwortregister nur Einsen liefert, wird übersprungen (es wird nichts gesendet); unerkannte Registerinhalte oder keine
+  Antwort heißen „hier ist keine arbeitende Mailbox“ → weiter zum nächsten Satz, am Ende wie in v9 „ohne Taktverwaltung“ (absent). Echte Registerfehler
+  (Lesen/Schreiben schlägt fehl, Rücklesung falsch, Zeit läuft rückwärts) bleiben fatal.
+* **Was die Fotos sonst zeigen:** der Navi21-Satz (0x16000) ist echter Speicher (Nachricht 1 und Argument 4e455849 blieben stehen), aber niemand bedient ihn
+  (Antwort bleibt 0). Pipe 0 läuft als 1080p60 (htotal 0x897, vtotal 0x464), HPD 2 verbunden (0x12), HUBP0 Adresse 0x80:0, Pitch 0x780 – alles wie bisher.
+* **Neue Diagnose nur im „absent“-Zustand (und nur bei aktivem Log):** `SMN MP1 public 03b10000..5c` (liest die Firmware-Flags der Power-Management-Firmware
+  über den NBIO-Index/Daten-Zugang; Bit 31 an Offset 0x24/0x28 wäre „Firmware läuft“), Fenster `MP0 C2PMSG 16040..160af` und `MP1 C2PMSG 16240..162af`
+  (nur Nicht-Null-Werte) und die GetSmuVersion-Abfrage der PMFW-Treibermailbox an beiden Sätzen. Zusammen zeigen sie, ob die Firmware überhaupt läuft.
+* Nur das Modul geändert: **kein neues ISO nötig**, der Kernel von v10 lädt v11 selbst.
+* Weiter ungeprüft: alles ab der Umschalt-Sequenz (erster echter Lauf folgt jetzt, weil der Treiber wieder aktiv wird); 240 Hz.
+
 ## Neunter Hardwarelauf (2026-10-15) und Paket v10: erstes erfolgreiches Laden, aber 60 Hz ohne Ton
 
 Fotos in `rx6600 test bilder`: v9 läuft durch die Probe („probe ok, 1920x1080 at 148512 kHz“), das Modul bleibt geladen, der Nutzer bestätigt den

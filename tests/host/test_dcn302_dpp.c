@@ -89,6 +89,9 @@ static void inputs(void){
         case 6:m.regs[0][DCN302_DPP_R_VIEW_START]=1;break;case 7:m.regs[0][DCN302_DPP_R_VIEW_SIZE]^=1;break;
         case 8:m.regs[0][DCN302_DPP_R_CLOCK]=0;break;case 9:m.regs[0][DCN302_DPP_R_STATUS]|=4;break;
         case 10:m.regs[0][DCN302_DPP_R_LOCAL_CLOCK]=0;break;case 11:m.regs[0][DCN302_DPP_R_LOCAL_CLOCK]|=0x10000000;break;}
+        if(fault==9){   /* line-buffer power state is only a status: tolerated */
+            CHECK(dcn302_dpp_prepare(&io,0,&request,guard,&t)==DCN302_OK && !m.invalid);cases++;continue;
+        }
         CHECK(dcn302_dpp_prepare(&io,0,&request,guard,&t)!=DCN302_OK && !t.prepared && !m.writes && !m.invalid);cases++;
     }
     init(&m,&io,0);request=mode();
@@ -124,6 +127,9 @@ static void conditions(void){
         case 33:t.touched=1u<<DCN302_DPP_PROGRAM_COUNT;break;case 34:t.hubp=5;break;case 35:t.guard=NULL;break;case 36:io.context=&t;break;
         case 37:t.before[DCN302_DPP_R_MODE]|=0x1000;break;
         case 38:m.regs[0][DCN302_DPP_R_LOCAL_CLOCK]=0;break;case 39:m.regs[0][DCN302_DPP_R_LOCAL_CLOCK]|=0x10000000;break;}
+        if(fault>=20 && fault<26){   /* LB group power states: tolerated */
+            CHECK(dcn302_dpp_apply_disabled(&io,&t)==DCN302_OK && !m.invalid);cases++;continue;
+        }
         CHECK(dcn302_dpp_apply_disabled(&io,&t)!=DCN302_OK && !m.writes && !m.invalid);cases++;
     }
     init(&m,&io,0);prepare(&m,&io,&t);CHECK(dcn302_dpp_verify_installed(&io,&t)==DCN302_BUSY && !m.writes);cases++;
@@ -142,7 +148,10 @@ static void faults(void){
     }
     for(unsigned kind=0;kind<4;kind++)for(unsigned n=1;n<=writes;n++){
         init(&m,&io,0);prepare(&m,&io,&t);old=m;
-        if(kind==0)m.activate_write=n;else if(kind==1)m.clock_loss_write=n;else if(kind==2)m.power_loss_write=n;else m.guard_loss_write=n;
+        if(kind==2){   /* a line-buffer power state change under the write is only a status: the transaction completes */
+            m.power_loss_write=n;CHECK(dcn302_dpp_apply_disabled(&io,&t)==DCN302_OK && t.applied);CHECK(!dcn302_dpp_restore_disabled(&io,&t) && !t.dirty && !t.poisoned);cases++;continue;
+        }
+        if(kind==0)m.activate_write=n;else if(kind==1)m.clock_loss_write=n;else m.guard_loss_write=n;
         CHECK(dcn302_dpp_apply_disabled(&io,&t)==DCN302_ROLLBACK && t.dirty && t.poisoned && m.writes==n);
         CHECK(dcn302_dpp_restore_disabled(&io,&t)==DCN302_ROLLBACK && m.writes==n);
         m.otg[4][0]=0;m.regs[0][DCN302_DPP_R_CLOCK]=old.regs[0][DCN302_DPP_R_CLOCK];m.regs[0][DCN302_DPP_R_STATUS]=old.regs[0][DCN302_DPP_R_STATUS];m.guard_ok=true;

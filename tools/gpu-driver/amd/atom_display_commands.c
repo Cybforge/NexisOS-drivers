@@ -33,6 +33,24 @@ bool atom_hdmi_transmitter_v7_parameters(uint8_t out[60],const atom_board_path *
     uint8_t legacy[32];if(!out || !atom_hdmi_transmitter_parameters(legacy,p,stream,hpd,khz,action))return false;
     memset(out,0,60);memcpy(out,legacy,11);return true;
 }
+enum atom_vm_error atom_display_check(atom_vm *vm,enum atom_display_command cmd){
+    if(!vm)return ATOM_VM_INPUT;
+    atom_table t;if(!atom_rom_table(&vm->rom,true,(unsigned)cmd,&t))return ATOM_VM_TABLE;
+    unsigned revision;size_t allocation;
+    switch(cmd){
+        case ATOM_DISPLAY_ENCODER:revision=5;allocation=12;break;
+        case ATOM_DISPLAY_PIXEL_CLOCK:revision=7;allocation=16;break;
+        case ATOM_DISPLAY_TRANSMITTER:
+            if(t.revision!=6 && t.revision!=7)return ATOM_VM_UNSUPPORTED;
+            revision=t.revision;allocation=t.revision==6?32:60;break;
+        default:return ATOM_VM_UNSUPPORTED;
+    }
+    if(t.format!=1 || t.revision!=revision)return ATOM_VM_UNSUPPORTED;
+    if(t.parameters>allocation)return ATOM_VM_INPUT;
+    uint32_t words[16]={0};
+    if(!atom_vm_check(vm,(unsigned)cmd,words,(unsigned)(allocation/4)))return vm->error==ATOM_VM_OK?ATOM_VM_INPUT:vm->error;
+    return ATOM_VM_OK;
+}
 enum atom_vm_error atom_display_execute(atom_vm *vm,enum atom_display_command cmd,uint8_t *parameters,size_t size){
     if(!vm || !parameters)return ATOM_VM_INPUT;
     atom_table t;if(!atom_rom_table(&vm->rom,true,(unsigned)cmd,&t))return ATOM_VM_TABLE;

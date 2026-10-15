@@ -90,7 +90,9 @@ static enum dcn302_hubp_error quiet(const dcn302_io *io,unsigned hubp){
         uint32_t c;
         if(!io->read(io->context,dcn302_hubp_register_bytes[hubp][CONTROL],&c))return DCN302_HUBP_IO;
         if((c&BLANK)!=DCN302_HUBP_HUBP_BLANK_EN_MASK || !(c&DCN302_HUBP_HUBP_NO_OUTSTANDING_REQ_MASK))return DCN302_HUBP_BUSY;
-        if(c&(DCN302_HUBP_HUBP_DISABLE_MASK|DCN302_HUBP_HUBP_UNDERFLOW_STATUS_MASK|DCN302_HUBP_HUBP_TIMEOUT_STATUS_MASK))return DCN302_HUBP_POWER;
+        /* UNDERFLOW/TIMEOUT STATUS are sticky: stopping the OTG under a running plane can latch them (Linux clears them). They say nothing
+         * about the registers programmed here, so they are ignored; only a disabled HUBP is a problem. */
+        if(c&DCN302_HUBP_HUBP_DISABLE_MASK)return DCN302_HUBP_POWER;
     }
     return DCN302_HUBP_OK;
 }

@@ -742,6 +742,11 @@ static void dpp_faults(nexis_gpu_entry_v2 entry){
     }
     for(unsigned fault=0;fault<6;fault++)for(unsigned n=1;n<=writes;n++){
         s=prepare_dpp(entry,&m,&k,&out);old=m;m.loss_kind=fault;m.loss_mmio_write=m.writes+n;
+        if(fault==5){   /* line-buffer power state changing during the write is only a status: the DPP transaction completes and restores normally */
+            CHECK(s->dpp_registers(s,RX6600_DPP_APPLY) && s->ready && s->dpp_transaction.applied);m.loss_mmio_write=0;
+            CHECK(s->dpp_registers(s,RX6600_DPP_RESTORE) && !s->dpp_transaction.dirty);
+            CHECK(s->bandwidth_registers(s,NULL,false,RX6600_HUBP_RESTORE));out.shutdown(s);cases++;continue;
+        }
         CHECK(!s->dpp_registers(s,RX6600_DPP_APPLY) && !s->ready && s->dpp_transaction.dirty && s->dpp_transaction.poisoned &&
             m.writes==old.writes+n && s->hubp_transaction.applied && s->hubbub_transaction.applied && (m.hubbub[0]&0x33)==0x22);
         unsigned quarantined=m.writes;
@@ -855,6 +860,9 @@ static void firmware_cases(nexis_gpu_entry_v2 entry,uintptr_t command_address,ui
     }
     for(unsigned loss=0;loss<7;loss++){
         s=prepare_firmware(entry,&m,&k,&out,0);start=m.writes;m.loss_kind=loss;m.loss_mmio_write=start+1;
+        if(loss==5){   /* the DPP line-buffer power state is only a status: the command goes through */
+            CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->timing_transaction.timing.pixel_khz,0)==ATOM_VM_OK && s->ready && !m.invalid);out.shutdown(s);cases++;continue;
+        }
         CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->timing_transaction.timing.pixel_khz,0)==ATOM_VM_IO &&
             s->firmware_changed && s->firmware_poisoned && !s->ready && m.writes==start+1 && !m.invalid);
         CHECK(!s->bandwidth_registers(s,NULL,false,RX6600_HUBP_RESTORE) && !s->dpp_registers(s,RX6600_DPP_RESTORE) &&
@@ -929,6 +937,9 @@ static void firmware_robustness(nexis_gpu_entry_v2 entry){
     m=original;memcpy(s,saved,sizeof(*s));out.shutdown(s);free(saved);
     for(unsigned kind=0;kind<7;kind++){
         s=prepare_firmware(entry,&m,&k,&out,9);unsigned start=m.writes;m.loss_kind=kind;m.firmware_read_loss=1;
+        if(kind==5){   /* DPP line-buffer power state: status only, the command completes */
+            CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_OK && !m.invalid);out.shutdown(s);cases++;continue;
+        }
         CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_IO && m.firmware_reads==1);
         firmware_stopped_failure(&m,s,start);out.shutdown(s);cases++;
     }
@@ -951,8 +962,23 @@ static void firmware_robustness(nexis_gpu_entry_v2 entry){
     }
     for(unsigned loss=0;loss<7;loss++)for(unsigned n=1;n<=2;n++){
         s=prepare_firmware(entry,&m,&k,&out,12);start=m.writes;m.loss_kind=loss;m.loss_mmio_write=start+n;
+        if(loss==5){   /* DPP line-buffer power state: status only */
+            CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_OK && !m.invalid);out.shutdown(s);cases++;continue;
+        }
         CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_IO && m.firmware_writes==n);
         firmware_stopped_failure(&m,s,start+n);out.shutdown(s);cases++;
+    }
+    /* Plan-time preflight: structural check of the two command tables, no hardware access; a table the interpreter cannot run is refused. */
+    s=prepare_firmware(entry,&m,&k,&out,0);start=m.writes;unsigned reads_before=m.reads;
+    CHECK(s->firmware_check(s) && m.writes==start && m.reads==reads_before && !s->firmware_changed && !s->firmware_poisoned && !m.invalid);out.shutdown(s);cases++;
+    {
+        const unsigned check_offsets[]={1000,1160};
+        for(unsigned which=0;which<2;which++){
+            s=prepare_firmware(entry,&m,&k,&out,0);start=m.writes;
+            m.rom[check_offsets[which]+3]=0;   /* revision 0: not a version this driver can run */
+            m.rom[2047]=0;unsigned sum2=0;for(unsigned n=0;n<2047;n++)sum2+=m.rom[n];m.rom[2047]=(uint8_t)(0-sum2);
+            CHECK(!s->firmware_check(s) && m.writes==start && !m.invalid && s->ready);out.shutdown(s);cases++;
+        }
     }
     const enum atom_display_command commands[]={ATOM_DISPLAY_PIXEL_CLOCK,ATOM_DISPLAY_ENCODER,ATOM_DISPLAY_TRANSMITTER};
     const unsigned offsets[]={1000,1080,1160};

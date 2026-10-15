@@ -135,6 +135,7 @@ static bool step_plan(void *c) {
     rx6600_state *s = m->s;
     const nexis_gpu_timing *t = &m->target;
     if (!rx6600_still_valid(s)) { nx_logf("rx6600: plan: routing/surface proof failed before the switch"); return false; }
+    if (!s->firmware_check(s)) { nx_logf("rx6600: plan: the video BIOS command tables cannot be run natively; nothing was changed"); return false; }
     uint32_t max_disp = 0, max_dpp = 0;
     if (!smu_max_level(s, DCN302_SMU_DISPCLK, &max_disp) || !smu_max_level(s, DCN302_SMU_DPPCLK, &max_dpp)) return false;
     max_disp *= 1000; max_dpp *= 1000;
@@ -152,7 +153,9 @@ static bool step_plan(void *c) {
         r.dpp_khz = (uint32_t)(want > max_dpp ? max_dpp : want);
         if (r.disp_khz < s->dfs.disp_khz) r.disp_khz = s->dfs.disp_khz;
         if (r.dpp_khz < s->dfs.dpp_khz) r.dpp_khz = s->dfs.dpp_khz;
-        for (unsigned p = 0; p < 5; p++) r.pipe_khz[p] = s->dfs.pipe_khz[p];
+        /* Only the pipe in use gets a DPP clock divider (Linux dccg2_update_dpp_dto: unused pipes keep their DTO off). A pipe whose DTO is off
+         * (everything the video BIOS left alone) stays off instead of being switched to a pass-through phase/modulo it does not need. */
+        for (unsigned p = 0; p < 5; p++) r.pipe_khz[p] = (s->dfs.dto_control & dcn302_dfs_dto_enable[p]) ? s->dfs.pipe_khz[p] : 0;
         r.pipe_khz[s->surface.hubp] = r.dpp_khz;
         if (!s->display_clocks(s, &r, RX6600_DFS_PREPARE)) {
             nx_logf("rx6600: plan: clock request %u/%u kHz rejected (error %u)", r.disp_khz, r.dpp_khz, (unsigned)s->dfs_transaction.error);
@@ -295,6 +298,12 @@ static bool step_scdc(void *c) {
     hdmi_scdc_io io = scdc_io(s);
     enum hdmi_scdc_error e = hdmi_scdc_configure(&io, m->new_khz, false, &s->scdc);
     if (e == HDMI_SCDC_VERSION && !m->scdc_config) { s->scdc.valid = false; return true; } /* legacy sink, nothing to configure */
+    /* Up to 340 MHz no scrambling is needed and Linux does not touch SCDC at all: a DDC problem there must not cost the whole switch. */
+    if (e && !m->scdc_config) {
+        nx_logf("rx6600: SCDC not usable (%u): not needed at %u kHz, continuing", (unsigned)e, m->new_khz);
+        s->scdc.valid = false;
+        return true;
+    }
     if (e) { nx_logf("rx6600: SCDC configuration for %u kHz failed (%u)", m->new_khz, (unsigned)e); return false; }
     m->scdc_changed = true;
     return true;

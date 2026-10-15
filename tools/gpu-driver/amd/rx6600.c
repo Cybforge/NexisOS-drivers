@@ -227,6 +227,32 @@ static bool firmware_delay(void *context,uint32_t us){
     if(!firmware_guard(s) || !s->io.delay_us(s,us) || !firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
     return true;
 }
+static bool vm_ensure(rx6600_state *s){
+    if(s->firmware_vm.ready)return true;
+    atom_vm_io io;volatile atom_vm_io *operations=&io;
+    operations->context=s;operations->read=firmware_read;operations->write=firmware_write;operations->delay_us=firmware_delay;operations->time_us=now;
+    return atom_vm_init(&s->firmware_vm,&s->firmware_rom,&io,s->firmware_scratch,sizeof(s->firmware_scratch));
+}
+/* Before the screen goes dark: can the interpreter run the two video BIOS command tables of the switch? Prints their versions (so the next
+ * log shows what the card really has) and structurally checks every reachable instruction, without touching the hardware. */
+static bool NEXIS_GPU_CALL firmware_check(void *context){
+    rx6600_state *s=context;
+    if(!s || !s->services || s->busy || s->firmware_poisoned)return false;
+    atom_table pixel,transmitter;
+    const bool have_pixel=atom_rom_table(&s->firmware_rom,true,ATOM_DISPLAY_PIXEL_CLOCK,&pixel),have_transmitter=atom_rom_table(&s->firmware_rom,true,ATOM_DISPLAY_TRANSMITTER,&transmitter);
+    nx_logf("rx6600: video BIOS command tables: SetPixelClock %s v%u.%u (%u bytes), UNIPHY transmitter %s v%u.%u (%u bytes)",
+        have_pixel?"found":"MISSING",have_pixel?(unsigned)pixel.format:0,have_pixel?(unsigned)pixel.revision:0,have_pixel?(unsigned)pixel.size:0,
+        have_transmitter?"found":"MISSING",have_transmitter?(unsigned)transmitter.format:0,have_transmitter?(unsigned)transmitter.revision:0,have_transmitter?(unsigned)transmitter.size:0);
+    if(!have_pixel || !have_transmitter)return false;
+    s->busy=true;
+    bool ok=vm_ensure(s);
+    enum atom_vm_error e1=ATOM_VM_INPUT,e2=ATOM_VM_INPUT;
+    if(ok){e1=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_PIXEL_CLOCK);e2=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_TRANSMITTER);}
+    s->busy=false;
+    if(!ok){nx_logf("rx6600: firmware interpreter could not be set up (ATOM error %u)",(unsigned)s->firmware_vm.error);return false;}
+    nx_logf("rx6600: firmware preflight: SetPixelClock %s (ATOM error %u), transmitter %s (ATOM error %u)",e1?"REFUSED":"ok",(unsigned)e1,e2?"REFUSED":"ok",(unsigned)e2);
+    return !e1 && !e2;
+}
 static enum atom_vm_error NEXIS_GPU_CALL firmware_command(void *context,enum atom_display_command command,uint32_t khz,unsigned action){
     rx6600_state *s=context;
     if(!s || !s->services || !s->ready || s->busy || s->firmware_poisoned || !(s->fw_baseline?true:s->dpp_transaction.applied) ||
@@ -250,11 +276,7 @@ static enum atom_vm_error NEXIS_GPU_CALL firmware_command(void *context,enum ato
         default:return ATOM_VM_UNSUPPORTED;
     }
     s->busy=true;s->firmware_error=ATOM_VM_OK;
-    if(!s->firmware_vm.ready){
-        atom_vm_io io;volatile atom_vm_io *operations=&io;
-        operations->context=s;operations->read=firmware_read;operations->write=firmware_write;operations->delay_us=firmware_delay;operations->time_us=now;
-        if(!atom_vm_init(&s->firmware_vm,&s->firmware_rom,&io,s->firmware_scratch,sizeof(s->firmware_scratch)))s->firmware_error=s->firmware_vm.error;
-    }
+    if(!vm_ensure(s))s->firmware_error=s->firmware_vm.error;
     if(s->firmware_error==ATOM_VM_OK && !firmware_guard(s))firmware_fault(s,ATOM_VM_IO);
     enum atom_vm_error e=s->firmware_error;
     if(e==ATOM_VM_OK)e=atom_display_execute(&s->firmware_vm,command,parameters,bytes);
@@ -479,7 +501,7 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     /* Volatile individual pointer stores avoid absolute pointer templates in
      * freestanding PIE; no runtime relocations/imports are available. */
     volatile dcn302_io *io=&s->io;io->context=s;io->read=read_reg;io->write=write_reg;io->delay_us=delay;
-    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;operations->sink_read=sink_read_ddc;operations->sink_write=sink_write_ddc;
+    volatile rx6600_state *operations=s;operations->clock_floor=clock_floor;operations->display_clocks=display_clocks;operations->bandwidth_plan=bandwidth_plan;operations->bandwidth_registers=bandwidth_registers;operations->timing_registers=timing_registers;operations->dpp_registers=dpp_registers;operations->firmware_command=firmware_command;operations->firmware_check=firmware_check;operations->sink_read=sink_read_ddc;operations->sink_write=sink_write_ddc;
     bool have_vram=k->resource(k->service_context,0,&s->vram),have_registers=k->resource(k->service_context,5,&s->registers);
     if(!have_vram || !have_registers){
         nx_logf("rx6600: PCI resource query rejected: BAR0 (VRAM) %s, BAR5 (registers) %s - see the [GPU] BAR lines above",have_vram?"ok":"REJECTED",have_registers?"ok":"REJECTED");

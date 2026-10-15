@@ -76,6 +76,8 @@ typedef struct {
      * After writes, dependencies remain retained until the future full
      * modeset/old-mode rollback proves hardware state; no silent release. */
     enum atom_vm_error (NEXIS_GPU_CALL *firmware_command)(void *,enum atom_display_command,uint32_t,unsigned);
+    /* Plan-time preflight of the video BIOS command tables the switch will run (pixel clock, transmitter): no hardware access. */
+    bool (NEXIS_GPU_CALL *firmware_check)(void *);
     /* Mode switch (rx6600_modeset.c). All of these are retained across calls. */
     dcn302_pixel_resync_transaction resync;
     dcn302_hdmi_transaction hdmi;

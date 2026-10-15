@@ -44,5 +44,8 @@ bool atom_vm_init(atom_vm *,const atom_rom *,const atom_vm_io *,uint8_t *scratch
  * Runtime IO errors stop immediately. A failed hardware transaction is not
  * implicitly rolled back: the display driver must restore its saved state. */
 bool atom_vm_execute(atom_vm *,unsigned command,uint32_t *parameters,unsigned words);
+/* Structural check only (every reachable opcode supported, every jump/case target an instruction boundary, nested tables present):
+ * no hardware access, nothing is executed. Lets the caller refuse a command before it changes anything. */
+bool atom_vm_check(atom_vm *,unsigned command,uint32_t *scratch_parameters,unsigned words);
 const char *atom_vm_error_string(enum atom_vm_error);
 #endif

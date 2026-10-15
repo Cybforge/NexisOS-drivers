@@ -13,4 +13,6 @@ bool atom_hdmi_transmitter_v7_parameters(uint8_t out[60],const atom_board_path *
 /* Execute only a version-compatible, preflighted board command. The caller
  * owns PHY/link sequencing and complete hardware rollback after any error. */
 enum atom_vm_error atom_display_execute(atom_vm *,enum atom_display_command,uint8_t *,size_t);
+/* Same version checks and structural preflight as atom_display_execute, without running anything. */
+enum atom_vm_error atom_display_check(atom_vm *,enum atom_display_command);
 #endif

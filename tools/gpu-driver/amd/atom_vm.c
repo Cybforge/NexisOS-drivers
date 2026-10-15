@@ -387,6 +387,15 @@ bool atom_vm_execute(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
     bool ok=preflight(v,command,ps,words,0) && run(v,command,ps,words,0);
     v->busy=false;return ok;
 }
+bool atom_vm_check(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
+    if(!v || v->busy)return false;
+    if(!v->ready || !ps || !words || words>ATOM_VM_PARAMETERS || command>255){v->error=ATOM_VM_INPUT;return false;}
+    v->busy=true;v->error=ATOM_VM_OK;v->steps=0;
+    uint64_t now=v->io.time_us(v->io.context);v->last_time_us=now;
+    v->deadline_us=now>UINT64_MAX-2000000?UINT64_MAX:now+2000000;
+    bool ok=preflight(v,command,ps,words,0);
+    v->busy=false;return ok;
+}
 const char *atom_vm_error_string(enum atom_vm_error error){
     switch(error){case ATOM_VM_OK:return "OK";case ATOM_VM_INPUT:return "invalid input";case ATOM_VM_TABLE:return "invalid/absent table";
         case ATOM_VM_BYTECODE:return "malformed bytecode";case ATOM_VM_UNSUPPORTED:return "unsupported firmware instruction";

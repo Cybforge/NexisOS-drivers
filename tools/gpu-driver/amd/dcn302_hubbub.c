@@ -117,8 +117,8 @@ static enum dcn302_hubbub_error quiet(const dcn302_io *io,const dcn302_hubbub_tr
         const uint32_t clocks=DCN302_HUBP_HUBP_CLOCK_ENABLE_MASK|DCN302_HUBP_HUBP_DISPCLK_R_CLOCK_ON_MASK|
             DCN302_HUBP_HUBP_DPPCLK_G_CLOCK_ON_MASK|DCN302_HUBP_HUBP_DCFCLK_R_CLOCK_ON_MASK|
             DCN302_HUBP_HUBP_DCFCLK_G_CLOCK_ON_MASK;
+        /* Sticky underflow/timeout status bits are ignored (see dcn302_hubp.c quiet()). */
         if((c&control)!=(DCN302_HUBP_HUBP_BLANK_EN_MASK|DCN302_HUBP_HUBP_NO_OUTSTANDING_REQ_MASK) ||
-           (c&(DCN302_HUBP_HUBP_UNDERFLOW_STATUS_MASK|DCN302_HUBP_HUBP_TIMEOUT_STATUS_MASK)) ||
            (k&clocks)!=clocks)return DCN302_HUBBUB_BUSY;
     }
     return DCN302_HUBBUB_OK;

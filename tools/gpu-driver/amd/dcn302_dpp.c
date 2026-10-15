@@ -15,9 +15,11 @@ static enum dcn302_error powered(const dcn302_io *io,unsigned p){
     uint32_t clock,state,local;
     if(!rd(io,p,DCN302_DPP_R_CLOCK,&clock) || !rd(io,p,DCN302_DPP_R_STATUS,&state) ||
        !rd(io,p,DCN302_DPP_R_LOCAL_CLOCK,&local))return DCN302_IO;
+    /* The line-buffer memory power STATE (DSCL_MEM_PWR_STATUS) is deliberately not required: a plane that runs 1:1 without the scaler (as the
+     * UEFI GOP leaves it) typically has its line buffer in light sleep, and the registers programmed here are not memory accesses. */
+    (void)state;
     return (clock&DCN302_DPP_CLOCK_REQUIRED_MASK)==DCN302_DPP_CLOCK_REQUIRED_MASK &&
-        (local&DCN302_DPP_LOCAL_CLOCK_ENABLE_MASK) && !(local&DCN302_DPP_LOCAL_TEST_MASK) &&
-        !(state&DCN302_DPP_LB_POWER_MASK)?DCN302_OK:DCN302_BUSY;
+        (local&DCN302_DPP_LOCAL_CLOCK_ENABLE_MASK) && !(local&DCN302_DPP_LOCAL_TEST_MASK)?DCN302_OK:DCN302_BUSY;
 }
 static enum dcn302_error snapshot(const dcn302_io *io,unsigned p,uint32_t *out){
     for(unsigned r=0;r<DCN302_DPP_REGISTER_COUNT;r++){

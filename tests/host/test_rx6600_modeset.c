@@ -38,7 +38,7 @@ typedef struct {
     uint32_t az_index[6],az[6][0x100],dto[3];
     uint8_t edid[256];bool serve_edid;
     uint64_t frame[5],frame_phase[5],frame_time[5];
-    unsigned hubp_index;
+    unsigned hubp_index,otg_pipe;
     bool tx_enabled;
     uint8_t scdc[256];
     unsigned reads,writes,queries,fail_read,fail_query,smu_writes,smu_triggers,smu_clock_requests;
@@ -175,9 +175,10 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
             frame_count(m,i);
             bool enable=value&DCN302_MASTER_ENABLE_MASK;
             m->otg[i][DCN302_R_CONTROL]=(value&~DCN302_MASTER_ACTIVE_MASK)|(enable?DCN302_MASTER_ACTIVE_MASK:0);
+            m->otg[i][DCN302_R_CLOCK]=(m->otg[i][DCN302_R_CLOCK]&~DCN302_BUSY_MASK)|(enable?DCN302_BUSY_MASK:0);   /* OTG_BUSY is high while the OTG runs (Linux waits for it to drop after disabling) */
             m->frame_time[i]=m->time;
-            if(i==3){ /* the pipe feeding HUBP 'hubp_index': requests drain when it stops */
-                if(enable)m->surface[m->hubp_index][DCN302_SURFACE_R_HUBP]&=~2u;else m->surface[m->hubp_index][DCN302_SURFACE_R_HUBP]|=2u;
+            if(i==m->otg_pipe){ /* the pipe feeding HUBP 'hubp_index': requests drain when it stops; stopping the OTG under a running plane latches the sticky UNDERFLOW status */
+                if(enable)m->surface[m->hubp_index][DCN302_SURFACE_R_HUBP]&=~2u;else m->surface[m->hubp_index][DCN302_SURFACE_R_HUBP]|=2u|0x10000000u;
             }
             INJECT_AFTER();
         }
@@ -210,6 +211,7 @@ static bool NEXIS_GPU_CALL wr(void *ctx,unsigned bar,uint32_t offset,uint32_t va
         /* UPDATE strobes self-clear in hardware. */
         if(r==DCN302_HDMI_R_AFMT_PACKET)value&=~DCN302_HDMI_CS_UPDATE_MASK;
         if(r==DCN302_HDMI_R_AFMT_INFO)value&=~DCN302_HDMI_INFO_UPDATE_MASK;
+        if(r==DCN302_HDMI_R_AUDIO_CLOCK)value=(value&~DCN302_HDMI_CLOCK_ON_MASK)|((value&DCN302_HDMI_CLOCK_ENABLE_MASK)?DCN302_HDMI_CLOCK_ON_MASK:0);   /* ON follows ENABLE */
         m->dig[i][r]=value;INJECT_AFTER();
     }
     for(unsigned r=0;r<DCN302_HUBBUB_REGISTER_COUNT;r++)if(offset==dcn302_hubbub_register_bytes[r]){
@@ -287,7 +289,7 @@ static void build_edid(uint8_t *e){
 }
 static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,unsigned pipe,unsigned bus,unsigned hpd,unsigned opp,unsigned mpcc,unsigned hubp,unsigned format){
     memset(m,0,sizeof(*m));memset(k,0,sizeof(*k));rom_init(m,link,bus,hpd);
-    m->timer=0x1002;m->pixel_khz=m->pll_khz=558195;m->tx_enabled=true;m->hubp_index=hubp;
+    m->timer=0x1002;m->pixel_khz=m->pll_khz=558195;m->tx_enabled=true;m->hubp_index=hubp;m->otg_pipe=pipe;
     m->smu_response=m->smu_status=1;m->smu_version=0x3a0100;m->smu_header=1;m->smu_interface=0x40;m->smu_features=3;
     m->dfs_pll=36|0x80000000u;m->dfs_dentist=24|(24u<<8)|(24u<<24)|DCN302_DFS_DISP_DONE_MASK|DCN302_DFS_DPP_DONE_MASK;
     *k=(nexis_gpu_services){.abi=2,.size=136,.vendor=0x1002,.device=0x73ff,.width=1920,.height=1080,.pitch=2048,.format=format,
@@ -299,10 +301,10 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
     m->dig[link][DCN302_HDMI_R_BE]=HSET(HSET(HSET(0,LINK_MODE,3),FE_SOURCE,1u<<stream),HPD,hpd);
     m->dig[link][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
     m->dig[stream][DCN302_HDMI_R_FE]=HSET(0,PIPE,pipe);
-    m->dig[stream][DCN302_HDMI_R_AUDIO_CLOCK]=DCN302_HDMI_CLOCK_ENABLE_MASK|DCN302_HDMI_CLOCK_ON_MASK;
+    m->dig[stream][DCN302_HDMI_R_AUDIO_CLOCK]=0;   /* like the UEFI GOP in DVI mode: the AFMT clock is off until the driver switches it on */
     m->dig[stream][DCN302_HDMI_R_CONTROL]=DCN302_HDMI_SCRAMBLE_MASK|DCN302_HDMI_CLOCK_RATIO_MASK; /* GOP lit 240 Hz with scrambling */
     uint32_t *o=m->otg[pipe];o[DCN302_R_CONTROL]=DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK|(3u<<DCN302_DISABLE_POINT_SHIFT);
-    o[DCN302_R_CLOCK]=DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK;o[DCN302_R_SOURCE]=opp<<DCN302_SEG0_SHIFT;o[DCN302_R_VTG]=DCN302_VTG_ENABLE_MASK;
+    o[DCN302_R_CLOCK]=DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK|DCN302_BUSY_MASK;o[DCN302_R_SOURCE]=opp<<DCN302_SEG0_SHIFT;o[DCN302_R_VTG]=DCN302_VTG_ENABLE_MASK;
     o[DCN302_R_H_TOTAL]=2079;o[DCN302_R_H_BLANK]=2032|(112u<<16);o[DCN302_R_H_SYNC]=64u<<16;
     o[DCN302_R_V_TOTAL]=1117;o[DCN302_R_V_BLANK]=1115|(35u<<16);o[DCN302_R_V_SYNC]=5u<<16;
     o[DCN302_TIMING_R_GLOBAL0]=0x800a0001;o[DCN302_TIMING_R_GLOBAL1]=0x80140002;
@@ -319,7 +321,7 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
         m->dpp[i][DCN302_DPP_R_FORMAT]|=0x100000;m->dpp[i][DCN302_DPP_R_CSC]|=0xc;
         m->dpp[i][DCN302_DPP_R_CNVC_CURSOR]|=0x10000;
         m->dpp[i][DCN302_DPP_R_MODE]|=0x1000;m->dpp[i][DCN302_DPP_R_LB_MEMORY]|=0x03030000;
-        m->dpp[i][DCN302_DPP_R_STATUS]=3;
+        m->dpp[i][DCN302_DPP_R_STATUS]=0x1557;   /* coefficient memory off, all line-buffer groups in light sleep (state 1): a 1:1 plane without the scaler */
         m->dpp[i][DCN302_DPP_R_LOCAL_CLOCK]=0x10;
     }
     m->fb_base=0x8000;m->fb_top=0x81ff;m->fb_offset=0x4000; /* RDNA2: MC address of VRAM starts at 0x8000000000, FB_OFFSET holds the aperture address */
@@ -367,7 +369,8 @@ static enum atom_vm_error NEXIS_GPU_CALL fw_double(void *context,enum atom_displ
     if(fail){s->firmware_poisoned=true;s->ready=false;s->error=RX6600_CLOCK;return ATOM_VM_IO;} /* effect applied, then an error */
     return ATOM_VM_OK;
 }
-static void doubles(rx6600_state *s){s->firmware_command=fw_double;s->sink_read=sink_read_test;s->sink_write=sink_write_test;}
+static bool NEXIS_GPU_CALL check_double(void *context){(void)context;return true;}   /* the model ROM has no real command tables */
+static void doubles(rx6600_state *s){s->firmware_command=fw_double;s->firmware_check=check_double;s->sink_read=sink_read_test;s->sink_write=sink_write_test;}
 /* ---- hardware snapshot (everything a rollback has to restore) ---- */
 typedef struct {
     uint32_t otg[5][DCN302_TIMING_REGISTER_COUNT],dig[5][DCN302_HDMI_REGISTER_COUNT],surface[5][DCN302_SURFACE_REGISTER_COUNT],hubp[5][DCN302_HUBP_REGISTER_COUNT];
@@ -383,9 +386,22 @@ static void take(const model *m,snap *s){
     memcpy(s->az,m->az,sizeof(s->az));memcpy(s->dto,m->dto,sizeof(s->dto));
 }
 static bool ppm_close(uint32_t a,uint32_t b){uint32_t d=a>b?a-b:b-a;return (uint64_t)d*1000000<=(uint64_t)b*1000;}
+/* Sticky UNDERFLOW/TIMEOUT status bits of DCHUBP_CNTL are history, not configuration: a stop/restart legitimately leaves them set. */
+static bool surfaces_equal(const model *m,const snap *s){
+    uint32_t a[5][DCN302_SURFACE_REGISTER_COUNT],b[5][DCN302_SURFACE_REGISTER_COUNT];
+    memcpy(a,s->surface,sizeof(a));memcpy(b,m->surface,sizeof(b));
+    for(unsigned i=0;i<5;i++){a[i][DCN302_SURFACE_R_HUBP]&=~0x70f00000u;b[i][DCN302_SURFACE_R_HUBP]&=~0x70f00000u;}
+    return !memcmp(a,b,sizeof(a));
+}
+static bool hubps_equal(const model *m,const snap *s){
+    uint32_t a[5][DCN302_HUBP_REGISTER_COUNT],b[5][DCN302_HUBP_REGISTER_COUNT];
+    memcpy(a,s->hubp,sizeof(a));memcpy(b,m->hubp,sizeof(b));
+    for(unsigned i=0;i<5;i++){a[i][DCN302_HUBP_R_DCHUBP_CNTL]&=~0x70f00000u;b[i][DCN302_HUBP_R_DCHUBP_CNTL]&=~0x70f00000u;}
+    return !memcmp(a,b,sizeof(a));
+}
 static bool same(const model *m,const snap *s){
     /* The frame counter bookkeeping is not hardware configuration. */
-    return !memcmp(s->otg,m->otg,sizeof(s->otg)) && !memcmp(s->surface,m->surface,sizeof(s->surface)) && !memcmp(s->hubp,m->hubp,sizeof(s->hubp)) &&
+    return !memcmp(s->otg,m->otg,sizeof(s->otg)) && surfaces_equal(m,s) && hubps_equal(m,s) &&
         !memcmp(s->dpp,m->dpp,sizeof(s->dpp)) && !memcmp(s->hubbub,m->hubbub,sizeof(s->hubbub)) && !memcmp(s->dig,m->dig,sizeof(s->dig)) &&
         s->dfs_pll==m->dfs_pll && s->dfs_dentist==m->dfs_dentist && s->dfs_control==m->dfs_control && !memcmp(s->dfs_dto,m->dfs_dto,sizeof(s->dfs_dto)) &&
         /* the old pixel clock is re-programmed from its measured value (<=1000 ppm), not from unknown PLL words */
@@ -549,7 +565,7 @@ static void real_card(bool dead_smu){
         if(i)m.otg[i][DCN302_R_CONTROL]=0x300;
     }
     m.dig[0][DCN302_HDMI_R_CONTROL]=0; /* DVI mode: no scrambling */
-    uint32_t *o=m.otg[0];o[DCN302_R_CONTROL]=0x00010301;
+    uint32_t *o=m.otg[0];o[DCN302_R_CONTROL]=0x00010301;o[DCN302_R_CLOCK]|=DCN302_BUSY_MASK;
     o[DCN302_R_H_TOTAL]=0x897;o[DCN302_R_H_BLANK]=2112|(192u<<16);o[DCN302_R_H_SYNC]=44u<<16;
     o[DCN302_R_V_TOTAL]=0x464;o[DCN302_R_V_BLANK]=1121|(41u<<16);o[DCN302_R_V_SYNC]=5u<<16;
     uint32_t *h=m.surface[0];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_CLOCK]=0x00f11111;h[DCN302_SURFACE_R_HUBP]=0x000f0002;

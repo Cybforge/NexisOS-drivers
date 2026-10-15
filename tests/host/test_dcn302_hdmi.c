@@ -8,7 +8,7 @@
 static unsigned cases;
 typedef struct {
     uint32_t regs[5][DCN302_HDMI_REGISTER_COUNT],before[5][DCN302_HDMI_REGISTER_COUNT];
-    unsigned ops,reads,writes,fail_at,ignored,cs_updates,info_updates,change_at,change_link,change_reg;uint32_t change_value;bool posted,dead,invalid;
+    unsigned ops,reads,writes,fail_at,ignored,cs_updates,info_updates,change_at,change_link,change_reg;uint32_t change_value;bool posted,dead,invalid,clock_stuck;
 } model;
 static bool locate(model *m,uint32_t offset,unsigned *b,enum dcn302_hdmi_register *r){
     for(unsigned n=0;n<5;n++)for(unsigned i=0;i<DCN302_HDMI_REGISTER_COUNT;i++)if(offset==dcn302_hdmi_register_bytes[n][i]){*b=n;*r=(enum dcn302_hdmi_register)i;return true;}
@@ -23,7 +23,11 @@ static bool rd(void *context,uint32_t offset,uint32_t *out){
 static bool wr(void *context,uint32_t offset,uint32_t value){
     model *m=context;unsigned b;enum dcn302_hdmi_register r;m->writes++;bool fail=++m->ops==m->fail_at;
     if(m->dead || (fail && !m->posted) || !locate(m,offset,&b,&r))return false;
-    CHECK(r!=DCN302_HDMI_R_BE_ENABLE && r!=DCN302_HDMI_R_AUDIO_CLOCK && r!=DCN302_HDMI_R_AFMT_POWER);
+    CHECK(r!=DCN302_HDMI_R_BE_ENABLE && r!=DCN302_HDMI_R_AFMT_POWER);
+    if(r==DCN302_HDMI_R_AUDIO_CLOCK){   /* only the clock-enable bit may be written; the ON status follows it like the hardware (unless stuck) */
+        CHECK(!((value^m->regs[b][r])&~DCN302_HDMI_CLOCK_ENABLE_MASK&~DCN302_HDMI_CLOCK_ON_MASK));
+        value=(value&~DCN302_HDMI_CLOCK_ON_MASK)|((value&DCN302_HDMI_CLOCK_ENABLE_MASK)&&!m->clock_stuck?DCN302_HDMI_CLOCK_ON_MASK:0);
+    }
     if(r==DCN302_HDMI_R_BE)CHECK(!((value^m->regs[b][r])&~DCN302_HDMI_LINK_MODE_MASK));   /* only DIG_MODE (DVI <-> HDMI) may change */
     if(r==DCN302_HDMI_R_AFMT_PACKET && GET(value,CS_UPDATE)){m->cs_updates++;value&=~DCN302_HDMI_CS_UPDATE_MASK;}
     if(r==DCN302_HDMI_R_AFMT_INFO && GET(value,INFO_UPDATE)){m->info_updates++;value&=~DCN302_HDMI_INFO_UPDATE_MASK;}
@@ -118,13 +122,28 @@ static void invalid(void){
         init(&m,&io,0);unsigned inst=kind==0?5:0,clock=kind==1?24000:kind==2?600001:558100,cfg=kind==3?0:3,source=kind==4?7:0;
         if(kind==5)m.regs[0][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK;
         if(kind==6)m.regs[0][DCN302_HDMI_R_BE]=SET(m.regs[0][DCN302_HDMI_R_BE],LINK_MODE,0);
-        if(kind==7)m.regs[0][DCN302_HDMI_R_AUDIO_CLOCK]=0;
-        if(kind==8)m.regs[0][DCN302_HDMI_R_AFMT_POWER]=DCN302_HDMI_POWER_STATE_MASK;
+        if(kind==7 || kind==8){cases++;continue;}   /* AFMT clock off / memory power state: handled below, no longer errors */
         if(kind==9)m.regs[0][DCN302_HDMI_R_BE]=SET(m.regs[0][DCN302_HDMI_R_BE],FE_SOURCE,2);
         if(kind==10)m.regs[0][DCN302_HDMI_R_FE]=SET(m.regs[0][DCN302_HDMI_R_FE],PIPE,7);
         CHECK(dcn302_hdmi_prepare(&io,inst,inst,clock,cfg,true,source,&t)!=DCN302_HDMI_OK && !m.writes && !t.valid);cases++;
     }
     init(&m,&io,0);CHECK(dcn302_hdmi_prepare(&io,0,0,148500,1,true,0,&t)==DCN302_HDMI_OK);expected(&m,0,148500,1,true,0);cases++;
+    /* The AFMT audio clock is off in DVI mode (UEFI GOP): prepare switches it on (Linux enc1_se_enable_audio_clock), restore switches it off again. */
+    for(unsigned link=0;link<5;link++){
+        init(&m,&io,link);m.regs[link][DCN302_HDMI_R_AUDIO_CLOCK]=0;memcpy(m.before,m.regs,sizeof(m.regs));
+        CHECK(dcn302_hdmi_prepare(&io,link,link,558100,3,true,0,&t)==DCN302_HDMI_OK && t.clock_changed &&
+              GET(m.regs[link][DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ENABLE) && GET(m.regs[link][DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ON));
+        m.regs[link][DCN302_HDMI_R_BE_ENABLE]=DCN302_HDMI_LINK_ENABLE_MASK|DCN302_HDMI_LINK_CLOCK_MASK;
+        CHECK(dcn302_hdmi_commit(&io,&t)==DCN302_HDMI_OK);
+        m.regs[link][DCN302_HDMI_R_BE_ENABLE]=0;
+        CHECK(dcn302_hdmi_restore(&io,&t)==DCN302_HDMI_OK && !t.clock_changed);restored(&m);cases++;
+    }
+    /* A clock that never reports ON ends in a clean rollback (clock off again, nothing else changed). */
+    init(&m,&io,0);m.clock_stuck=true;m.regs[0][DCN302_HDMI_R_AUDIO_CLOCK]=0;memcpy(m.before,m.regs,sizeof(m.regs));
+    CHECK(dcn302_hdmi_prepare(&io,0,0,558100,3,true,0,&t)==DCN302_HDMI_CLOCK && !t.prepared);restored(&m);cases++;
+    /* The AFMT packet memory power STATE is only a status: never a reason to fail. */
+    init(&m,&io,0);m.regs[0][DCN302_HDMI_R_AFMT_POWER]=DCN302_HDMI_POWER_STATE_MASK;memcpy(m.before,m.regs,sizeof(m.regs));
+    CHECK(dcn302_hdmi_prepare(&io,0,0,558100,3,true,0,&t)==DCN302_HDMI_OK);cases++;
     for(unsigned change=0;change<3;change++){
         init(&m,&io,0);m.regs[3][DCN302_HDMI_R_BE]=SET(m.regs[3][DCN302_HDMI_R_BE],FE_SOURCE,1);
         CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)==DCN302_HDMI_OK);
@@ -143,6 +162,9 @@ static void invalid(void){
         if(change==2){m.change_reg=DCN302_HDMI_R_BE_ENABLE;m.change_value=DCN302_HDMI_LINK_ENABLE_MASK;}
         if(change==3){m.change_link=0;m.change_reg=DCN302_HDMI_R_AUDIO_CLOCK;m.change_value=0;}
         if(change==4){m.change_link=0;m.change_reg=DCN302_HDMI_R_AFMT_POWER;m.change_value=DCN302_HDMI_POWER_STATE_MASK;}
+        if(change>=3){   /* the AFMT clock/power state changing under us is tolerated now: the clock is (re)enabled, the power state is a status */
+            CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)==DCN302_HDMI_OK);cases++;continue;
+        }
         CHECK(dcn302_hdmi_prepare(&io,0,3,558100,3,true,0,&t)!=DCN302_HDMI_OK && !t.valid && !m.writes);cases++;
     }
 }

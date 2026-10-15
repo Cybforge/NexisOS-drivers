@@ -157,6 +157,9 @@ static void preconditions(void){
             case 26:m.clocks[0]=0;break;case 27:m.regs[0][0]^=1;break;case 28:t.after[0]^=1;break;
             case 29:t.prepared=false;break;case 30:t.touched=UINT64_C(1)<<63;break;case 31:io.context=&t;break;
             case 32:t.timing.htotal=0;break;case 33:t.hubp=5;break;}
+        if(fault==24 || fault==25){   /* sticky underflow/timeout STATUS bits are ignored on purpose: stopping the OTG under a running plane can latch them */
+            CHECK(dcn302_hubp_apply_disabled(&io,&t)==DCN302_HUBP_OK && !m.invalid);cases++;continue;
+        }
         CHECK(dcn302_hubp_apply_disabled(&io,&t)!=DCN302_HUBP_OK && !m.writes && !t.dirty && !m.invalid);cases++;
     }
 }

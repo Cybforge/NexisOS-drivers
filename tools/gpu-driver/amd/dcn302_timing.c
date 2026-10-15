@@ -32,6 +32,9 @@ static enum dcn302_error snapshot(const dcn302_io *io,unsigned pipe,uint32_t *ou
     return DCN302_OK;
 }
 static bool powered(uint32_t clock){return (clock&(DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK|DCN302_SOFT_RESET_MASK|DCN302_BUSY_MASK))==(DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK);}
+/* Prepare runs while the display still runs (plan phase): OTG_BUSY is high then (Linux waits for it to drop after disabling the OTG), so it
+ * must not be required to be low there. The stopped-pipeline checks (quiet) keep requiring it. */
+static bool powered_running(uint32_t clock){return (clock&(DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK|DCN302_SOFT_RESET_MASK))==(DCN302_CLOCK_ENABLE_MASK|DCN302_CLOCK_ON_MASK);}
 static bool supported(const uint32_t *s){
     return !GET(s[DCN302_R_INTERLACE],INTERLACE) && !GET(s[DCN302_R_H_DIV],H_DIV) &&
         !GET(s[DCN302_R_FORMAT],FORMAT) && !GET(s[DCN302_R_FORMAT],DSC) &&
@@ -80,7 +83,7 @@ enum dcn302_error dcn302_timing_prepare(const dcn302_io *io,unsigned pipe,const 
     uint32_t zero[DCN302_TIMING_REGISTER_COUNT]={0},second[DCN302_TIMING_REGISTER_COUNT],clock,lock;
     enum dcn302_error e=encode(timing,sync,zero,second);if(e)return t->error=e;
     if(!rd(io,pipe,DCN302_R_CLOCK,&clock) || !rd(io,pipe,LOCK,&lock))return t->error=DCN302_IO;
-    if(!powered(clock) || (lock&(DCN302_LOCK_MASK|DCN302_LOCK_STATUS_MASK)))return t->error=DCN302_BUSY;
+    if(!powered_running(clock) || (lock&(DCN302_LOCK_MASK|DCN302_LOCK_STATUS_MASK)))return t->error=DCN302_BUSY;
     e=snapshot(io,pipe,t->before);if(e)return t->error=e;
     e=snapshot(io,pipe,second);if(e)return t->error=e;
     if(memcmp(second,t->before,sizeof(second)))return t->error=DCN302_READBACK;

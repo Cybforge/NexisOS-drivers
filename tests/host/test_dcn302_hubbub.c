@@ -152,6 +152,9 @@ static void conditions(void){
         case 30:m.regs[1]^=0x80000000;break;case 31:t.after[1]^=1;break;case 32:t.prepared=false;break;
         case 33:t.touched=UINT64_C(1)<<63;break;case 34:t.hubp=5;break;case 35:io.context=&t;break;
         case 36:t.request.frac_urg_nom=1001;break;case 37:t.reference.khz++;break;case 38:t.reference.valid=false;break;}
+        if(fault==24 || fault==25){   /* sticky underflow/timeout STATUS bits are ignored on purpose (see dcn302_hubp.c) */
+            CHECK(dcn302_hubbub_apply_disabled(&io,&t)==DCN302_HUBBUB_OK && !m.invalid);cases++;continue;
+        }
         CHECK(dcn302_hubbub_apply_disabled(&io,&t)!=DCN302_HUBBUB_OK && !m.writes && !t.dirty && !m.invalid);cases++;
     }
 }

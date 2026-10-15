@@ -4,12 +4,12 @@
 #include "dcn302_hdmi_regs.h"
 enum dcn302_hdmi_error {DCN302_HDMI_OK,DCN302_HDMI_INPUT,DCN302_HDMI_IO,DCN302_HDMI_BUSY,DCN302_HDMI_CLOCK,DCN302_HDMI_READBACK,DCN302_HDMI_ROLLBACK};
 typedef struct {
-    bool valid,prepared,committed,audio,mode_changed;unsigned instance,link;   /* mode_changed: DIG_MODE was DVI (2) and is HDMI (3) now */
+    bool valid,prepared,committed,audio,mode_changed,clock_changed;unsigned instance,link;   /* mode_changed: DIG_MODE was DVI (2) and is HDMI (3) now; clock_changed: the AFMT audio clock was off and this transaction switched it on */
     uint32_t registers[DCN302_HDMI_REGISTER_COUNT];
 } dcn302_hdmi_transaction;
 /* Native DCN302 HDMI RGB8 + stereo PCM48 audio packet engine.
  * The parent must already have disabled the correct transmitter, routed its
- * front end, enabled AFMT clocks, configured the PHY/pixel clock and (above
+ * front end, configured the PHY/pixel clock and (above
  * 340 MHz) read back SCDC TMDS_CONFIG=3 on that connector. No PLL, I2C pin,
  * scanout or HDA codec state is guessed here. audio_source is a verified
  * AZALIA endpoint, not the stream/pipe/connector number. */

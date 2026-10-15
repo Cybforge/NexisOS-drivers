@@ -23,6 +23,8 @@
 #include <string.h>
 #define GET(v,f) (((v)&DCN302_HDMI_##f##_MASK)>>DCN302_HDMI_##f##_SHIFT)
 #define SET(v,f,n) (((v)&~DCN302_HDMI_##f##_MASK)|(((uint32_t)(n)<<DCN302_HDMI_##f##_SHIFT)&DCN302_HDMI_##f##_MASK))
+/* DIG0_DIG_FE_CNTL__DIG_START_MASK (Linux v6.12 dcn302 sh_mask): bit 10 of the DIG front-end control register. */
+#define DCN302_HDMI_DIG_START_MASK 0x00000400u
 typedef struct {enum dcn302_hdmi_register reg;uint32_t mask,pulse;} owned_reg;
 static const owned_reg owned[]={
     {DCN302_HDMI_R_FE,DCN302_HDMI_RGB_ENCODING_MASK|DCN302_HDMI_COLOR_FORMAT_MASK,0},
@@ -50,11 +52,11 @@ static bool set_readback(const dcn302_io *io,unsigned inst,enum dcn302_hdmi_regi
     if(!rd(io,inst,r,&now) || !wr(io,inst,r,(now&~(mask|pulse))|(value&(mask|pulse))) || !rd(io,inst,r,&after))return false;
     return !((after^value)&mask); /* UPDATE strobes can self-clear; never compare/replay them. */
 }
+/* The AFMT memory power state is a status that follows access, not a condition for programming the packet registers. */
 static bool quiescent(const dcn302_io *io,unsigned inst,unsigned link){
-    uint32_t be,clock,power;
+    uint32_t be,clock;
     return rd(io,link,DCN302_HDMI_R_BE_ENABLE,&be) && !GET(be,LINK_ENABLE) &&
-        rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&clock) && GET(clock,CLOCK_ENABLE) && GET(clock,CLOCK_ON) &&
-        rd(io,inst,DCN302_HDMI_R_AFMT_POWER,&power) && !GET(power,POWER_STATE);
+        rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&clock) && GET(clock,CLOCK_ENABLE) && GET(clock,CLOCK_ON);
 }
 static bool restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
     bool ok=true;
@@ -72,11 +74,19 @@ static bool restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
         if(set_readback(io,t->link,DCN302_HDMI_R_BE,DCN302_HDMI_LINK_MODE_MASK,0,t->registers[DCN302_HDMI_R_BE]))t->mode_changed=false;
         else ok=false;
     }
+    /* The audio clock was off before (UEFI GOP leaves it off in DVI mode): switch it off again, last. */
+    if(t->clock_changed){
+        /* Best effort: an AFMT clock left running is harmless, and a failure here must never keep the picture from coming back. */
+        (void)set_readback(io,t->instance,DCN302_HDMI_R_AUDIO_CLOCK,DCN302_HDMI_CLOCK_ENABLE_MASK,0,t->registers[DCN302_HDMI_R_AUDIO_CLOCK]);
+        t->clock_changed=false;
+    }
     if(ok){t->prepared=false;t->committed=false;}
     return ok;
 }
 enum dcn302_hdmi_error dcn302_hdmi_restore(const dcn302_io *io,dcn302_hdmi_transaction *t){
     if(!t || !t->valid || !valid(io,t->instance) || t->link>=5)return DCN302_HDMI_INPUT;
+    /* A failed prepare rolls itself back; the sequencer's undo of that step must then find nothing left to do. */
+    if(!t->prepared && !t->mode_changed && !t->clock_changed)return DCN302_HDMI_OK;
     if(!quiescent(io,t->instance,t->link))return DCN302_HDMI_BUSY;
     return restore(io,t)?DCN302_HDMI_OK:DCN302_HDMI_ROLLBACK;
 }
@@ -92,7 +102,7 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     /* TMDS only: HDMI (3) as the video BIOS usually leaves it, or DVI (2) as UEFI GOP does for many monitors; DVI is
      * switched to HDMI below (data islands, infoframes and audio need DIG_MODE 3, Linux dcn10_link_encoder_setup). */
     if((GET(be,LINK_MODE)!=3 && GET(be,LINK_MODE)!=2) || GET(be,FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
-    if(!GET(clock_control,CLOCK_ENABLE) || !GET(clock_control,CLOCK_ON) || GET(power,POWER_STATE))return DCN302_HDMI_CLOCK;
+    (void)clock_control;(void)power;   /* the AFMT audio clock is switched on below when it is off (Linux enc1_se_enable_audio_clock) */
     for(unsigned n=0;n<DCN302_HDMI_REGISTER_COUNT;n++){
         unsigned index=(n==DCN302_HDMI_R_BE || n==DCN302_HDMI_R_BE_ENABLE)?link:inst;
         if(!rd(io,index,(enum dcn302_hdmi_register)n,&t->registers[n]))return DCN302_HDMI_IO;
@@ -102,8 +112,6 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     if(GET(t->registers[DCN302_HDMI_R_BE_ENABLE],LINK_ENABLE))return DCN302_HDMI_BUSY;
     if((GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=3 && GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)!=2) ||
        GET(t->registers[DCN302_HDMI_R_BE],FE_SOURCE)!=(1u<<inst))return DCN302_HDMI_INPUT;
-    if(!GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ENABLE) || !GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ON) ||
-       GET(t->registers[DCN302_HDMI_R_AFMT_POWER],POWER_STATE))return DCN302_HDMI_CLOCK;
     if(GET(t->registers[DCN302_HDMI_R_FE],PIPE)>=5)return DCN302_HDMI_INPUT;
     t->valid=true;uint32_t target[DCN302_HDMI_REGISTER_COUNT];memcpy(target,t->registers,sizeof(target));
     target[DCN302_HDMI_R_FE]=SET(SET(target[DCN302_HDMI_R_FE],RGB_ENCODING,0),COLOR_FORMAT,0);
@@ -127,6 +135,30 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     target[DCN302_HDMI_R_CS2]=SET(SET(SET(SET(SET(SET(target[DCN302_HDMI_R_CS2],CHANNEL2,3),CHANNEL3,4),CHANNEL4,5),CHANNEL5,6),CHANNEL6,7),CHANNEL7,8);
     target[DCN302_HDMI_R_AFMT_INFO]|=DCN302_HDMI_INFO_UPDATE_MASK;
     target[DCN302_HDMI_R_AFMT_PACKET]=SET(target[DCN302_HDMI_R_AFMT_PACKET],SAMPLE_SEND,0)|DCN302_HDMI_CS_UPDATE_MASK;
+    /* Linux enc1_se_enable_audio_clock: REG_UPDATE(AFMT_CNTL, AFMT_AUDIO_CLOCK_EN, 1), then wait for AFMT_AUDIO_CLOCK_ON (10 us x 1000).
+     * The video BIOS / GOP leaves it off while the link runs in DVI mode (no data islands), so requiring it on made every real HDMI setup fail. */
+    if(!GET(t->registers[DCN302_HDMI_R_AUDIO_CLOCK],CLOCK_ENABLE)){
+        t->clock_changed=true;
+        if(!set_readback(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,DCN302_HDMI_CLOCK_ENABLE_MASK,0,DCN302_HDMI_CLOCK_ENABLE_MASK))
+            return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+    }
+    {
+        bool on=false;
+        for(unsigned n=0;n<=1000 && !on;n++){
+            uint32_t c;
+            if(!rd(io,inst,DCN302_HDMI_R_AUDIO_CLOCK,&c))return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+            on=GET(c,CLOCK_ENABLE) && GET(c,CLOCK_ON);
+            if(!on && io->delay_us && !io->delay_us(io->context,10))break;
+        }
+        if(!on)return restore(io,t)?DCN302_HDMI_CLOCK:DCN302_HDMI_ROLLBACK;
+        /* The packet memory wakes on first access; give it a moment but never fail on its power state. */
+        for(unsigned n=0;n<100;n++){
+            uint32_t p;
+            if(!rd(io,inst,DCN302_HDMI_R_AFMT_POWER,&p))return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+            if(!GET(p,POWER_STATE))break;
+            if(io->delay_us && !io->delay_us(io->context,10))break;
+        }
+    }
     if(GET(t->registers[DCN302_HDMI_R_BE],LINK_MODE)==2){
         t->mode_changed=true;       /* set first: a half-done write is reverted by restore() */
         if(!set_readback(io,link,DCN302_HDMI_R_BE,DCN302_HDMI_LINK_MODE_MASK,0,SET(t->registers[DCN302_HDMI_R_BE],LINK_MODE,3)))
@@ -137,6 +169,26 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *io,unsigned inst,uns
     for(unsigned n=0;n<sizeof(owned)/sizeof(*owned);n++){
         const owned_reg *o=&owned[n];uint32_t mask=o->mask;if(o->reg==DCN302_HDMI_R_VBI)mask|=dcn302_hdmi_acp_mask[inst];
         if(!set_readback(io,inst,o->reg,mask,o->pulse,target[o->reg]))return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+    }
+    /* Reset the DIG front-end FIFO after the pixel clock changed: Linux (enc3_stream_encoder_hdmi_set_stream_attribute) does this through the
+     * VBIOS ENCODER_CONTROL SETUP table, or - without the table - DIG_FE_CNTL.DIG_START = 1, 1 us, 0, 1 us. Without it the FIFO keeps the
+     * phase of the old clock and the first picture can come out garbled or not at all although every register reads back correctly. */
+    {
+        uint32_t fe;
+        if(!rd(io,inst,DCN302_HDMI_R_FE,&fe))return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
+        bool ok=wr(io,inst,DCN302_HDMI_R_FE,fe|DCN302_HDMI_DIG_START_MASK);
+        if(ok && io->delay_us)ok=io->delay_us(io->context,1);
+        if(!wr(io,inst,DCN302_HDMI_R_FE,fe&~DCN302_HDMI_DIG_START_MASK)){ok=false;(void)wr(io,inst,DCN302_HDMI_R_FE,fe&~DCN302_HDMI_DIG_START_MASK);}   /* never leave the FIFO held in reset */
+        if(ok && io->delay_us)ok=io->delay_us(io->context,1);
+        uint32_t after=DCN302_HDMI_DIG_START_MASK;
+        for(unsigned attempt=0;attempt<3;attempt++){   /* DIG_START must read back 0: a lost clearing write is repeated */
+            if(!rd(io,inst,DCN302_HDMI_R_FE,&after)){ok=false;break;}
+            if(!(after&DCN302_HDMI_DIG_START_MASK))break;
+            ok=false;
+            if(!wr(io,inst,DCN302_HDMI_R_FE,after&~DCN302_HDMI_DIG_START_MASK))continue;
+        }
+        if(after&DCN302_HDMI_DIG_START_MASK)ok=false;
+        if(!ok)return restore(io,t)?DCN302_HDMI_IO:DCN302_HDMI_ROLLBACK;
     }
     t->prepared=true;return DCN302_HDMI_OK;
 }
