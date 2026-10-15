@@ -36,6 +36,7 @@ typedef struct {
     uint32_t data_block,reg_block,fb_base,divmul[2],io_attr,bit_shift,io_mode;
     bool equal,above,busy,ready;
     enum atom_vm_error error;
+    bool fault_set;unsigned fault_command,fault_pc,fault_opcode;   /* first structural fault of a check: command table, byte offset, opcode */
     unsigned steps,step_limit;
     uint64_t deadline_us,last_time_us,delay_remaining_us;
 } atom_vm;

@@ -36,6 +36,21 @@ int main(void){
     fixture();w16(0x200,5);fix();CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));CHECK(!atom_rom_table(&rom,true,12,&table));cases++;
     fixture();memcpy(bytes+1024,bytes,1024);bytes[0x74]=3;bytes[0x75]=0;fix();
     CHECK(atom_rom_open(bytes,2048,0x1002,0x73ff,&rom) && rom.image==bytes+1024);cases++;
+    /* A command table that lies past the image length declared in the PCIR header is still reachable (Linux bounds nothing but the buffer). */
+    fixture();w16(0xc0+4+13*2,1100);w16(1100,8);bytes[1102]=1;bytes[1103]=7;bytes[1104]=4;bytes[1105]=8;fix();
+    CHECK(atom_rom_open(bytes,2048,0x1002,0x73ff,&rom) && rom.size==2048);
+    CHECK(atom_rom_table(&rom,true,13,&table) && table.size==8 && table.revision==7 && table.workspace==4 && table.parameters==8);
+    CHECK(atom_rom_command_entry(&rom,13)==1100 && atom_rom_command_entry(&rom,12)==0x200 && atom_rom_command_entry(&rom,14)==0);cases++;
+    fixture();w16(0xc0+4+13*2,1100);fix();CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && !atom_rom_table(&rom,true,13,&table));cases++;
+    /* A command entry past the end of the declared list is read like Linux does, but only accepted for a table that looks like one. */
+    fixture();w16(0xc0+4+90*2,0x300);w16(0x300,7);bytes[0x302]=1;bytes[0x303]=7;bytes[0x304]=16;bytes[0x305]=16;fix();
+    CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && atom_rom_table(&rom,true,90,&table) && table.revision==7 && table.parameters==16);cases++;
+    fixture();w16(0xc0+4+90*2,0x300);w16(0x300,7);bytes[0x302]=1;bytes[0x303]=0;fix();
+    CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && !atom_rom_table(&rom,true,90,&table));cases++;
+    fixture();w16(0xc0+4+90*2,0x300);w16(0x300,0x9000);bytes[0x302]=1;bytes[0x303]=7;fix();
+    CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && !atom_rom_table(&rom,true,90,&table));cases++;
+    fixture();w16(0x180+4+60*2,0x300);fix();   /* data tables stay bounded by their list */
+    CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && !atom_rom_table(&rom,false,60,&table));cases++;
     CHECK(atom_pixel_clock_v7(params,558100,2,1,3,4,0));
     CHECK(params[0]==0xc8 && params[1]==0x28 && params[2]==0x55 && params[3]==0); /* 5,581,000 x 100 Hz */
     CHECK(params[4]==1 && params[5]==3 && params[6]==4 && params[8]==2 && !params[9] && !params[15]);cases++;

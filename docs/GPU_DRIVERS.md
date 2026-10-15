@@ -124,6 +124,37 @@ braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert �
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
 
+## Offline-Audit (2026-10-15) und Paket v12: die Umschalt-Sequenz gegen das gelesen, was die echte Karte tatsächlich zeigt
+
+Der Nutzer wollte nicht zum zwölften Mal testen. Statt auf das nächste Foto zu warten wurde jede Voraussetzung der Umschalt-Sequenz mit dem verglichen, was die
+echte Karte (Dumps, Linux-Quellen) wirklich liefert, und die Host-Modelle wurden **realistischer** gemacht (Status-Bits folgen dem Zustand wie in der Hardware).
+Gefunden und behoben (alle nur Modul, kein neues ISO):
+
+1. **OTG_BUSY während der Planung:** `dcn302_timing_prepare` verlangte „nicht busy“ – das Bit ist aber hoch, solange die OTG läuft (Linux wartet nach dem
+   Abschalten darauf, dass es fällt). Die Planung wäre auf der echten Karte immer an „bandwidth model/registers refused“ gescheitert, ohne dass etwas passiert.
+   Das Modell setzt BUSY jetzt wie die Hardware; der Fehler war damit reproduzierbar und ist behoben (Prepare ignoriert BUSY, die Prüfungen bei gestoppter OTG nicht).
+2. **AFMT-Audio-Takt war nie eingeschaltet:** `dcn302_hdmi_prepare` verlangte `AFMT_AUDIO_CLOCK_EN/ON` schon gesetzt („der Aufrufer schaltet ihn ein“),
+   aber kein Aufrufer tat das. Die UEFI-GOP lässt ihn im DVI-Modus aus → der HDMI-Schritt wäre mit „HDMI_CLOCK“ gescheitert, nachdem der Bildschirm schon dunkel war.
+   Jetzt schaltet Prepare ihn wie Linux (`enc1_se_enable_audio_clock`) ein, wartet auf `CLOCK_ON` und schaltet ihn beim Zurückrollen wieder aus (best effort).
+   Der AFMT-Speicher-Power-STATE ist nur noch ein Status.
+3. **DIG-FIFO wurde nie zurückgesetzt:** Linux setzt beim HDMI-Stream-Setup den DIG-Front-End-FIFO zurück (`DIG_FE_CNTL.DIG_START` 1 → 0, über die VBIOS-Tabelle
+   `ENCODER_CONTROL SETUP` oder direkt). Ohne das behält der FIFO die Phase des alten Takts: alle Register lesen richtig zurück, das Bild kann trotzdem fehlen.
+   Jetzt im HDMI-Schritt; das Zurücksetzen von `DIG_START` wird verifiziert und wiederholt.
+4. **SCDC bis 340 MHz war fatal:** ein DDC-Problem bei einem Modus, der gar kein Scrambling braucht (Linux fasst SCDC dort nicht an), kostete die ganze Umschaltung.
+   Jetzt nur ein Logeintrag. Über 340 MHz bleibt es fatal.
+5. **Sticky Underflow/Timeout-Status der HUBP:** Das Anhalten der OTG unter einer laufenden Ebene kann `HUBP_UNDERFLOW_STATUS` auslösen; `quiet()` von HUBP und HUBBUB
+   brach dann mit „POWER“/„BUSY“ ab. Die Bits sind Verlauf, keine Konfiguration → werden ignoriert.
+6. **Line-Buffer-Power-STATE des DPP:** wurde als „muss an sein“ verlangt; eine 1:1-Ebene ohne Scaler (so lässt die GOP sie) hat den Line-Buffer typischerweise im
+   Schlafzustand. Es ist ein Status, kein Zugriff → nicht mehr verlangt.
+7. **Vor dem Dunkelwerden:** `firmware_check` listet die beiden BIOS-Befehlstabellen (SetPixelClock, UNIPHY-Transmitter) mit Version und prüft sie **ohne Hardwarezugriff**
+   mit dem Preflight des ATOM-Interpreters (jeder erreichbare Opcode unterstützt, alle Sprungziele gültig). Eine Tabelle, die der Interpreter nicht kann, wird so im
+   harmlosen Planungsschritt gefunden und im Log benannt.
+8. DPP-Taktteiler (DTO) werden nur noch für die benutzte Pipe angefordert (Linux `dccg2_update_dpp_dto`), nicht mehr für alle fünf.
+9. HDMI-Restore ist nach einem selbst zurückgerollten Prepare idempotent (vorher: „UNDO FAILED“ → Ausgabe aus).
+
+Die Modell-Tests laufen weiter (1854 Fälle in der Umschalt-Sequenz inkl. Fehlerinjektion). **Nicht auf der echten Karte geprüft**; der erste echte Lauf der Umschalt-Sequenz
+steht weiter aus. Weiterhin offen: 240 Hz (kein Power-Management), ATOM-Tabellen des echten BIOS wurden nie ausgeführt.
+
 ## Zehnter Hardwarelauf (2026-10-15) und Paket v11: Rückschritt von v10 behoben
 
 Fotos von v10: `mailbox set 0 (MP1 aperture 0x16000): … alles 00000000`, `mailbox set 1 (MP1 aperture 0x16200): … alles ffffffff`. Der Navi23-Adresssatz

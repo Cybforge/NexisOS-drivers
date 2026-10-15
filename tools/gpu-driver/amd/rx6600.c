@@ -233,6 +233,45 @@ static bool vm_ensure(rx6600_state *s){
     operations->context=s;operations->read=firmware_read;operations->write=firmware_write;operations->delay_us=firmware_delay;operations->time_us=now;
     return atom_vm_init(&s->firmware_vm,&s->firmware_rom,&io,s->firmware_scratch,sizeof(s->firmware_scratch));
 }
+static void dump_hex(const char *name,const uint8_t *p,unsigned n);
+/* ---- video BIOS command list diagnostics: log only, no hardware access ---- */
+static unsigned rom_u16(const atom_rom *r,unsigned at){return at<=r->size && r->size-at>=2?(unsigned)r->image[at]|(unsigned)r->image[at+1]<<8:0;}
+static void rom_report(const atom_rom *rom){
+    if(!nx_log_enabled() || !rom || !rom->image)return;
+    const unsigned list=rom->commands,bytes=rom_u16(rom,list),entries=bytes>=4?(bytes-4)/2:0;
+    unsigned set=0;
+    for(unsigned i=0;i<entries;i++)if(rom_u16(rom,list+4+i*2))set++;
+    nx_logf("rx6600: video BIOS: %u bytes from the ATOM image on, ATOM header 0x%x, command list 0x%x (%u bytes = %u entries, %u set), data list 0x%x%s",
+        (unsigned)rom->size,rom_u16(rom,0x48),list,bytes,entries,set,(unsigned)rom->data,rom->checksum_ok?"":", checksum not zero");
+    nx_logf("rx6600: video BIOS command entries: [0]=%x [4]=%x [12]=%x [13]=%x [42]=%x [46]=%x [50]=%x [76]=%x",
+        rom_u16(rom,list+4),rom_u16(rom,list+4+4*2),rom_u16(rom,list+4+12*2),rom_u16(rom,list+4+13*2),
+        rom_u16(rom,list+4+42*2),rom_u16(rom,list+4+46*2),rom_u16(rom,list+4+50*2),rom_u16(rom,list+4+76*2));
+    if(bytes>=4 && list+bytes<=rom->size)dump_hex("command list",rom->image+list,bytes<176?bytes:176);
+}
+/* Looks through the whole ROM for tables that have the header of the three display commands (format 1, revision 7 / 6 / 5, a plausible
+ * size, an end-of-table opcode at the end) and says whether the command list points at them: shows a table that exists but is
+ * listed under another number, or not at all. */
+static void rom_scan(const atom_rom *rom){
+    if(!nx_log_enabled() || !rom || !rom->image)return;
+    unsigned found=0;
+    for(unsigned o=0;o+8<=rom->size && found<8;o++){
+        const uint8_t *p=rom->image+o;
+        const unsigned size=p[0]|(unsigned)p[1]<<8,revision=p[3];
+        if(size<24 || size>0x4000 || o+size>rom->size || p[2]!=1 || (revision!=5 && revision!=6 && revision!=7) || (p[5]&127)>80)continue;
+        bool eot=false;
+        for(unsigned k=size>10?size-10:6;k<size;k++)if(p[k]==0x5b)eot=true;
+        if(!eot)continue;
+        unsigned listed=0xffff;
+        const unsigned list=rom->commands,bytes=rom_u16(rom,list),entries=bytes>=4?(bytes-4)/2:0;
+        for(unsigned i=0;i<entries && listed==0xffff;i++)if(rom_u16(rom,list+4+i*2)==o)listed=i;
+        found++;
+        if(listed==0xffff)nx_logf("rx6600: video BIOS: table-like header (format 1, revision %u) at 0x%x, %u bytes, workspace %u, parameters %u: NOT in the command list",
+            revision,o,size,(unsigned)p[4],(unsigned)(p[5]&127));
+        else nx_logf("rx6600: video BIOS: table-like header (format 1, revision %u) at 0x%x, %u bytes, workspace %u, parameters %u: command list entry %u",
+            revision,o,size,(unsigned)p[4],(unsigned)(p[5]&127),listed);
+    }
+    if(!found)nx_logf("rx6600: video BIOS: no table with the header of SetPixelClock / transmitter / encoder control anywhere in the %u bytes",(unsigned)rom->size);
+}
 /* Before the screen goes dark: can the interpreter run the two video BIOS command tables of the switch? Prints their versions (so the next
  * log shows what the card really has) and structurally checks every reachable instruction, without touching the hardware. */
 static bool NEXIS_GPU_CALL firmware_check(void *context){
@@ -243,14 +282,22 @@ static bool NEXIS_GPU_CALL firmware_check(void *context){
     nx_logf("rx6600: video BIOS command tables: SetPixelClock %s v%u.%u (%u bytes), UNIPHY transmitter %s v%u.%u (%u bytes)",
         have_pixel?"found":"MISSING",have_pixel?(unsigned)pixel.format:0,have_pixel?(unsigned)pixel.revision:0,have_pixel?(unsigned)pixel.size:0,
         have_transmitter?"found":"MISSING",have_transmitter?(unsigned)transmitter.format:0,have_transmitter?(unsigned)transmitter.revision:0,have_transmitter?(unsigned)transmitter.size:0);
-    if(!have_pixel || !have_transmitter)return false;
+    if(!have_pixel || !have_transmitter){rom_report(&s->firmware_rom);rom_scan(&s->firmware_rom);return false;}
     s->busy=true;
     bool ok=vm_ensure(s);
     enum atom_vm_error e1=ATOM_VM_INPUT,e2=ATOM_VM_INPUT;
-    if(ok){e1=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_PIXEL_CLOCK);e2=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_TRANSMITTER);}
+    unsigned f1[3]={0,0,0},f2[3]={0,0,0};
+    if(ok){
+        e1=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_PIXEL_CLOCK);
+        if(s->firmware_vm.fault_set){f1[0]=s->firmware_vm.fault_command;f1[1]=s->firmware_vm.fault_pc;f1[2]=s->firmware_vm.fault_opcode;}
+        e2=atom_display_check(&s->firmware_vm,ATOM_DISPLAY_TRANSMITTER);
+        if(s->firmware_vm.fault_set){f2[0]=s->firmware_vm.fault_command;f2[1]=s->firmware_vm.fault_pc;f2[2]=s->firmware_vm.fault_opcode;}
+    }
     s->busy=false;
     if(!ok){nx_logf("rx6600: firmware interpreter could not be set up (ATOM error %u)",(unsigned)s->firmware_vm.error);return false;}
     nx_logf("rx6600: firmware preflight: SetPixelClock %s (ATOM error %u), transmitter %s (ATOM error %u)",e1?"REFUSED":"ok",(unsigned)e1,e2?"REFUSED":"ok",(unsigned)e2);
+    if(e1)nx_logf("rx6600: firmware preflight: SetPixelClock stopped in command table %u at byte 0x%x, opcode 0x%x",f1[0],f1[1],f1[2]);
+    if(e2)nx_logf("rx6600: firmware preflight: transmitter stopped in command table %u at byte 0x%x, opcode 0x%x",f2[0],f2[1],f2[2]);
     return !e1 && !e2;
 }
 static enum atom_vm_error NEXIS_GPU_CALL firmware_command(void *context,enum atom_display_command command,uint32_t khz,unsigned action){
@@ -522,6 +569,8 @@ static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k
     if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom)){nx_logf("rx6600: probe stopped at: video BIOS image (%u bytes) not usable",(unsigned)k->rom_bytes);return fail(s,RX6600_ROM);}
     s->firmware_rom=rom;
     if(!rom.checksum_ok)nx_logf("rx6600: note: the video BIOS image checksum is not zero (tables are still used)");
+    nx_logf("rx6600: video BIOS command list: entry 12 (SetPixelClock) 0x%x, entry 76 (transmitter) 0x%x, list at 0x%x, %u bytes from the ATOM image on",
+        rom_u16(&rom,rom.commands+4+12*2),rom_u16(&rom,rom.commands+4+76*2),(unsigned)rom.commands,(unsigned)rom.size);
     unsigned detail=atom_board_open(&rom,&s->board);
     if(detail!=ATOM_BOARD_OK){nx_logf("rx6600: probe stopped at: board data of the video BIOS (code %u)",detail);dump_rom_tables(&rom);return fail(s,RX6600_BOARD);}
     detail=atom_memory_open(&rom,&s->memory);

@@ -131,12 +131,17 @@ static bool decode(atom_vm *v,atom_vm_frame *f,unsigned pc,instruction *i){
     i->end=pc;return true;
 }
 static bool boundary(const atom_vm_frame *f,unsigned pc){return pc>=6 && pc<f->table.size && (f->boundaries[pc/8]&(1u<<(pc&7)));}
+/* Where a structural check stopped (first fault only): the log of a refused command names the table, offset and opcode. */
+static bool fault(atom_vm *v,unsigned command,unsigned pc,unsigned opcode){
+    if(!v->fault_set){v->fault_set=true;v->fault_command=command;v->fault_pc=pc;v->fault_opcode=opcode;}
+    return false;
+}
 static bool preflight(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,unsigned depth){
-    if(depth>=ATOM_VM_DEPTH)return fail(v,ATOM_VM_LIMIT);
+    if(depth>=ATOM_VM_DEPTH){fault(v,command,0,0);return fail(v,ATOM_VM_LIMIT);}
     atom_vm_frame *f=&v->frames[depth];memset(f,0,sizeof(*f));
-    if(!atom_rom_table(&v->rom,true,command,&f->table))return fail(v,ATOM_VM_TABLE);
+    if(!atom_rom_table(&v->rom,true,command,&f->table)){fault(v,command,0,0);return fail(v,ATOM_VM_TABLE);}
     f->parameters=ps;f->words=words;f->shift=f->table.parameters/4;
-    if(f->table.parameters&3 || f->shift>words)return fail(v,ATOM_VM_BOUNDS);
+    if(f->table.parameters&3 || f->shift>words){fault(v,command,5,f->table.parameters);return fail(v,ATOM_VM_BOUNDS);}
     bool has_end=false;
     for(unsigned pc=6;pc<f->table.size;){
         /* Some boards pad command tables. Padding is never a branch target. */
@@ -144,28 +149,29 @@ static bool preflight(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,un
             unsigned p=pc;while(p<f->table.size && (f->table.bytes[p]==0 || f->table.bytes[p]==255))p++;
             if(p==f->table.size)break;
         }
-        instruction i;if(!tick(v) || !decode(v,f,pc,&i))return false;
+        instruction i;if(!tick(v))return false;
+        if(!decode(v,f,pc,&i))return fault(v,command,pc,f->table.bytes[pc]);
         f->boundaries[pc/8]|=1u<<(pc&7);if(i.opcode==91)has_end=true;pc=i.end;
     }
-    if(!has_end)return fail(v,ATOM_VM_BYTECODE);
+    if(!has_end){fault(v,command,f->table.size,0);return fail(v,ATOM_VM_BYTECODE);}
     for(unsigned pc=6;pc<f->table.size && boundary(f,pc);){
-        instruction i;if(!tick(v) || !decode(v,f,pc,&i))return false;
-        if(i.opcode>=67 && i.opcode<=73 && !boundary(f,i.target))return fail(v,ATOM_VM_BYTECODE);
+        instruction i;if(!tick(v))return false;
+        if(!decode(v,f,pc,&i))return fault(v,command,pc,f->table.bytes[pc]);
+        if(i.opcode>=67 && i.opcode<=73 && !boundary(f,i.target)){fault(v,command,pc,i.opcode);return fail(v,ATOM_VM_BYTECODE);}
         if(i.opcode==66){
             unsigned p=i.target;uint32_t n;
             while(le16(f->table.bytes+p)!=0x5a5a){
                 operand value;p++;if(!operand_decode(v,f,&p,IMM,i.src.align,&value) || !take(v,f,&p,2,&n))return false;
-                if(!boundary(f,n))return fail(v,ATOM_VM_BYTECODE);
+                if(!boundary(f,n)){fault(v,command,pc,i.opcode);return fail(v,ATOM_VM_BYTECODE);}
             }
         }
         if(i.opcode==82){
             atom_table nested;
             /* A genuinely absent optional command is a no-op, matching ATOM.
              * An out-of-range index or malformed nonzero entry is rejected. */
-            unsigned m=v->rom.commands,n=le16(v->rom.image+m);
-            if(i.extra>=(n-4)/2)return fail(v,ATOM_VM_TABLE);
-            if(le16(v->rom.image+m+4+i.extra*2)){
-                if(!atom_rom_table(&v->rom,true,i.extra,&nested) || !preflight(v,i.extra,ps+f->shift,words-f->shift,depth+1))return false;
+            if(atom_rom_command_entry(&v->rom,i.extra)){
+                if(!atom_rom_table(&v->rom,true,i.extra,&nested)){fault(v,i.extra,0,0);return fail(v,ATOM_VM_TABLE);}
+                if(!preflight(v,i.extra,ps+f->shift,words-f->shift,depth+1))return false;
             }
         }
         pc=i.end;
@@ -331,8 +337,7 @@ static bool run(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,unsigned
                 break;
             }
             case 82:{
-                unsigned off=v->rom.commands+4+i.extra*2;
-                if(le16(v->rom.image+off) && !run(v,i.extra,ps+f->shift,words-f->shift,depth+1))return false;
+                if(atom_rom_command_entry(&v->rom,i.extra) && !run(v,i.extra,ps+f->shift,words-f->shift,depth+1))return false;
                 break;
             }
             case 91:return true;
@@ -380,7 +385,7 @@ bool atom_vm_init(atom_vm *v,const atom_rom *rom,const atom_vm_io *io,uint8_t *s
 bool atom_vm_execute(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
     if(!v || v->busy)return false;
     if(!v->ready || !ps || !words || words>ATOM_VM_PARAMETERS || command>255){v->error=ATOM_VM_INPUT;return false;}
-    v->busy=true;v->error=ATOM_VM_OK;v->steps=0;v->data_block=v->reg_block=v->fb_base=v->io_attr=v->bit_shift=v->io_mode=0;
+    v->busy=true;v->error=ATOM_VM_OK;v->fault_set=false;v->steps=0;v->data_block=v->reg_block=v->fb_base=v->io_attr=v->bit_shift=v->io_mode=0;
     v->divmul[0]=v->divmul[1]=0;v->equal=v->above=false;v->delay_remaining_us=2000000;
     uint64_t now=v->io.time_us(v->io.context);v->last_time_us=now;
     v->deadline_us=now>UINT64_MAX-2000000?UINT64_MAX:now+2000000;
@@ -390,7 +395,7 @@ bool atom_vm_execute(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
 bool atom_vm_check(atom_vm *v,unsigned command,uint32_t *ps,unsigned words){
     if(!v || v->busy)return false;
     if(!v->ready || !ps || !words || words>ATOM_VM_PARAMETERS || command>255){v->error=ATOM_VM_INPUT;return false;}
-    v->busy=true;v->error=ATOM_VM_OK;v->steps=0;
+    v->busy=true;v->error=ATOM_VM_OK;v->fault_set=false;v->steps=0;
     uint64_t now=v->io.time_us(v->io.context);v->last_time_us=now;
     v->deadline_us=now>UINT64_MAX-2000000?UINT64_MAX:now+2000000;
     bool ok=preflight(v,command,ps,words,0);

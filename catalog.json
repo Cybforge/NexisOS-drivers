@@ -6,7 +6,7 @@
       "version": 2,
       "module_bytes": 12352,
       "package_bytes": 12448,
-      "sha256": "1788590c288360e19eedb9eee3bc0c9b93948b1e5637b66ab3c00199646cacd8",
+      "sha256": "a65857cf67e611bd89d0f211afe3b4b56bee5694ac1fa202851431fda67f7960",
       "vendor": "1234",
       "devices": [
         "1111"
@@ -18,10 +18,10 @@
     },
     {
       "name": "rx6600",
-      "version": 12,
+      "version": 13,
       "module_bytes": 307264,
       "package_bytes": 307360,
-      "sha256": "a40f1879112b401165b9726d1ef0d68ac95400d2e86a88eb40ef3c493cba55c4",
+      "sha256": "fd784292a0067e32f19076f44db74c9a0ed1550066618ea463ce18701b0f4314",
       "vendor": "1002",
       "devices": [
         "73ff",

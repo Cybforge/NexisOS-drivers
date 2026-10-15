@@ -28,12 +28,20 @@ bool atom_rom_open(const uint8_t *bytes,size_t size,uint16_t vendor,uint16_t dev
             unsigned sum=0;for(unsigned i=0;i<length;i++)sum+=image[i]; /* informational only: a ROM that the firmware or a flasher touched can fail it although the tables are fine */
             unsigned commands=u16(image+atom+30),data=u16(image+atom+32);
             if(!master(image,length,commands) || !master(image,length,data))return false;
-            out->image=image;out->size=length;out->commands=(uint16_t)commands;out->data=(uint16_t)data;out->checksum_ok=!(sum&255);return true;
+            /* size: everything from this image to the end of the retained ROM, not just the length the PCIR header declares. Linux indexes
+             * the whole BIOS buffer without any such bound; vendors are not careful with that field, and refusing a table that lies a few
+             * bytes past it made the display command tables look absent on the first real card. */
+            out->image=image;out->size=remaining;out->commands=(uint16_t)commands;out->data=(uint16_t)data;out->checksum_ok=!(sum&255);return true;
         }
         if(image[pcir+21]&128)return false;
         off+=length;
     }
     return false;
+}
+unsigned atom_rom_command_entry(const atom_rom *rom,unsigned index){
+    if(!rom || !rom->image || !master(rom->image,rom->size,rom->commands))return 0;
+    unsigned entry=rom->commands+4+index*2;
+    return extent(rom->size,entry,2)?u16(rom->image+entry):0;
 }
 bool atom_rom_table(const atom_rom *rom,bool command,unsigned index,atom_table *out){
     if(!out)return false;
@@ -42,11 +50,20 @@ bool atom_rom_table(const atom_rom *rom,bool command,unsigned index,atom_table *
     unsigned master_offset=command?rom->commands:rom->data;
     if(!master(rom->image,rom->size,master_offset))return false;
     unsigned n=(u16(rom->image+master_offset)-4)/2;
-    if(index>=n)return false;
-    unsigned off=u16(rom->image+master_offset+4+index*2),minimum=command?6:4;
+    /* Linux (atom.c) does not bound a command index by the size of the list. A command entry past the declared list is therefore
+     * still read, but only accepted when the table it points to looks like a command table. */
+    const bool beyond=index>=n;
+    if(beyond && !command)return false;
+    unsigned entry=master_offset+4+index*2;
+    if(!extent(rom->size,entry,2))return false;
+    unsigned off=u16(rom->image+entry),minimum=command?6:4;
     if(!off || !extent(rom->size,off,minimum))return false;
     unsigned size=u16(rom->image+off);
     if(size<minimum || !extent(rom->size,off,size))return false;
+    if(beyond){
+        unsigned format=rom->image[off+2],revision=rom->image[off+3];
+        if(size>0x8000 || format<1 || format>4 || revision<1 || revision>15)return false;
+    }
     out->bytes=rom->image+off;out->size=(uint16_t)size;out->format=out->bytes[2];out->revision=out->bytes[3];
     if(command){out->workspace=out->bytes[4];out->parameters=out->bytes[5]&127;}
     return true;

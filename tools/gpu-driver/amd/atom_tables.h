@@ -4,10 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 /* Read-only views of the board's own firmware. No x86 option-ROM execution. */
-typedef struct { const uint8_t *image;size_t size;uint16_t commands,data;bool checksum_ok; } atom_rom; /* checksum_ok: informational (Linux does not verify the image checksum) */
+typedef struct { const uint8_t *image;size_t size; /* size: from image to the end of the retained ROM */uint16_t commands,data;bool checksum_ok; } atom_rom; /* checksum_ok: informational (Linux does not verify the image checksum) */
 typedef struct { const uint8_t *bytes;uint16_t size;uint8_t format,revision,workspace,parameters; } atom_table;
 bool atom_rom_open(const uint8_t *,size_t,uint16_t vendor,uint16_t device,atom_rom *);
 bool atom_rom_table(const atom_rom *,bool command,unsigned index,atom_table *);
+/* Raw entry of the master command list (0 = no such command), with the same unbounded-by-list-size reading as Linux. */
+unsigned atom_rom_command_entry(const atom_rom *,unsigned index);
 /* ATOM SetPixelClock v1.7 accepts 100-Hz units, not old 10-kHz units. */
 bool atom_pixel_clock_v7(uint8_t output[16],uint32_t pixel_khz,uint8_t crtc,uint8_t pll,uint8_t encoder,uint8_t mode,uint8_t flags);
 #endif
