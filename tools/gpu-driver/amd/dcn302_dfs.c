@@ -34,7 +34,8 @@ static enum dcn302_dfs_error decode(dcn302_dfs_snapshot *s){
     /* CLK02's DFS reference is 100MHz, not the board's HDMI crystal. */
     s->vco_khz=(uint32_t)((multiplier*100000)>>32);
     unsigned disp=GET(s->dentist,DISP_WRITE),dpp=GET(s->dentist,DPP_WRITE);
-    uint32_t dd=divider(disp),pd=divider(dpp);
+    /* Linux (dentist_get_divider_from_did) clamps a divider id below 8 up to 8 instead of treating it as invalid. */
+    uint32_t dd=divider(disp<8?8u:disp),pd=divider(dpp<8?8u:dpp);
     if(!s->vco_khz || !dd || !pd)return DCN302_DFS_UNSUPPORTED;
     if(!GET(s->dentist,DISP_DONE) || !GET(s->dentist,DPP_DONE) || GET(s->dentist,DISP_READ)!=disp)return DCN302_DFS_BUSY;
     uint64_t numerator=(uint64_t)s->vco_khz*4;

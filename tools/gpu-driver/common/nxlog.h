@@ -8,4 +8,5 @@
  * Lines are cut at 199 characters. Safe to call before nx_log_attach(): ignored. */
 void nx_log_attach(const nexis_gpu_services *services);
 void nx_logf(const char *format, ...) __attribute__((format(printf, 1, 2)));
+bool nx_log_enabled(void);   /* a sink is attached: worth gathering extra diagnostic data */
 #endif

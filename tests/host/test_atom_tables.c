@@ -21,12 +21,15 @@ int main(void){
     CHECK(atom_rom_table(&rom,true,12,&table) && table.size==7 && table.revision==7 && table.workspace==16 && table.parameters==16);
     CHECK(atom_rom_table(&rom,false,0,&table) && table.size==8);cases++;
     CHECK(!atom_rom_table(&rom,true,81,&table) && !table.bytes);CHECK(!atom_rom_table(&rom,true,80,&table));cases++;
-    CHECK(!atom_rom_open(bytes,1024,0x1002,0x73df,&rom));CHECK(!atom_rom_open(bytes,1024,0x8086,0x73ff,&rom));cases++;
+    CHECK(atom_rom_open(bytes,1024,0x1002,0x73df,&rom)); /* the PCIR device id is not compared (board partners reuse images; the module checks the PCI id itself) */
+    CHECK(!atom_rom_open(bytes,1024,0x8086,0x73ff,&rom));cases++;
     for(unsigned n=0;n<1024;n++){fixture();CHECK(!atom_rom_open(bytes,n,0x1002,0x73ff,&rom));cases++;}
     for(unsigned off=0;off<128;off++){
         fixture();w16(0x18,1024-off);fix();CHECK(!atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));cases++;
     }
-    fixture();bytes[512]^=1;CHECK(!atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));cases++;
+    /* A bad image checksum is only reported (vendors patch ROMs without re-summing them); the structure checks still gate the open. */
+    fixture();CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && rom.checksum_ok);
+    fixture();bytes[512]^=1;CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom) && !rom.checksum_ok);cases++;
     fixture();w16(0xc0,165);fix();CHECK(!atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));cases++;
     fixture();w16(0x80,65535);fix();CHECK(!atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));cases++;
     fixture();w16(0x200,1024);fix();CHECK(atom_rom_open(bytes,1024,0x1002,0x73ff,&rom));CHECK(!atom_rom_table(&rom,true,12,&table));cases++;

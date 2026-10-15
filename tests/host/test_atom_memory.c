@@ -20,7 +20,7 @@ static bool zero(const atom_memory *out){atom_memory empty={0};return !memcmp(ou
 int main(void){
     for(unsigned rev=3;rev<=5;rev++)for(unsigned modules=1;modules<=16;modules++){
         atom_rom rom=fixture(rev,modules);atom_memory out;
-        CHECK(atom_memory_open(&rom,&out)==ATOM_MEMORY_OK && out.memory_mb==8192 && out.channel_enable==255 && out.type==0x70 && out.channels==8 && out.channel_bytes==2 && out.modules==modules);cases++;
+        CHECK(atom_memory_open(&rom,&out)==ATOM_MEMORY_OK && out.memory_mb==8192u*modules && out.channel_enable==255 && out.type==0x70 && out.channels==8 && out.channel_bytes==2 && out.modules==modules);cases++;
     }
     for(unsigned rev=3;rev<=5;rev++){
         atom_rom rom=fixture(rev,2);unsigned size=rev==3?52:rev==4?60:84;
@@ -32,8 +32,12 @@ int main(void){
         unsigned geometry[]={0,4,(rev==5?13u:23u),(rev==5?14u:24u),(rev==5?15u:25u)};
         for(unsigned f=0;f<5;f++){
             fixture(rev,2);uint8_t *p=image+224+size;p[geometry[f]]^=1;atom_memory out;
+            if(f<2){   /* capacity and channel mask may differ per module (Linux ignores the mask); capacities add up */
+                CHECK(atom_memory_open(&rom,&out)==ATOM_MEMORY_OK && out.memory_mb==(f?16384u:16385u) && out.channels==8);cases++;continue;
+            }
             CHECK(atom_memory_open(&rom,&out)!=ATOM_MEMORY_OK && zero(&out));cases++;
         }
+        fixture(rev,1);p32(image+224+4,0);{atom_memory out;CHECK(atom_memory_open(&rom,&out)==ATOM_MEMORY_OK && !out.channel_enable && out.memory_mb==8192);}cases++;
         for(unsigned field=0;field<2;field++)for(unsigned value=0;value<256;value++){
             fixture(rev,1);image[224+(rev==5?14:24)+field]=(uint8_t)value;atom_memory out;
             bool valid=field?(value>=4 && value<=6):(value>=1 && value<=16);

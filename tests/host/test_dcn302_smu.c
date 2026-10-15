@@ -85,13 +85,20 @@ static void failures(void){
     model m;dcn302_smu s;dcn302_smu_limits limits,zero={0};uint32_t value;
     for(unsigned kind=0;kind<9;kind++){
         dcn302_io io=init(&m);
+        if(kind==3 || kind==4){          /* header / driver-interface numbers are only reported, never fatal (Linux ignores them) */
+            if(kind==3)m.interface=0x3f;else m.header=2;
+            CHECK(dcn302_smu_open(&s,&io,now) && s.ready && (kind==3?s.interface_mismatch && s.raw_interface==0x3f:s.header_mismatch && s.raw_header==2));cases++;continue;
+        }
         switch(kind){
             case 0:m.wrong_test=true;break;case 1:m.version=0;break;case 2:m.version=UINT32_MAX;break;
             case 3:m.interface=0x3f;break;case 4:m.header=2;break;case 5:m.response=0;break;
             case 6:m.response=0xab;break;case 7:m.latency=100;m.backwards=true;break;case 8:m.response=0;m.frozen=true;break;
         }
+        if(kind==5 || kind==8){          /* idle mailbox of a card that only ran the video BIOS: Linux ignores the first wait */
+            CHECK(dcn302_smu_open(&s,&io,now) && s.ready && !s.poisoned && m.triggers==4 && !m.invalid);cases++;continue;
+        }
         CHECK(!dcn302_smu_open(&s,&io,now) && !s.ready && !s.busy && !m.invalid);
-        if(kind>=5 && kind!=7)CHECK(!m.triggers && !m.writes);
+        if(kind==6)CHECK(!m.triggers && !m.writes);
         cases++;
     }
     for(unsigned status=0xfc;status<=0xff;status++){
@@ -102,8 +109,8 @@ static void failures(void){
     }
     for(unsigned kind=0;kind<7;kind++){
         dcn302_io io=init(&m);CHECK(dcn302_smu_open(&s,&io,now));
-        switch(kind){case 0:m.features[2]=0;break;case 1:m.features[2]=33;break;case 2:m.features[2]|=0x100;break;
-            case 3:m.features[2]=0x80000003;break;case 4:m.frequencies[2][0]=0;break;case 5:m.frequencies[2][1]=100;break;case 6:m.frequencies[2][2]=500;break;}
+        switch(kind){case 0:m.features[2]=0;break;case 1:m.features[2]=33;break;case 2:m.features[2]=0x80000003;m.frequencies[2][0]=0;break;
+            case 3:m.features[2]=0x80000003;break;case 4:m.frequencies[2][0]=0;break;case 5:m.frequencies[2][1]=90;break;case 6:m.frequencies[2][2]=500;break;}
         memset(&limits,0xa5,sizeof(limits));CHECK(!dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&limits) && !memcmp(&limits,&zero,sizeof(limits)) && !s.clocks[2].valid && !s.poisoned);cases++;
     }
     for(unsigned clock=0;clock<20;clock++)if(!clock_valid(clock)){

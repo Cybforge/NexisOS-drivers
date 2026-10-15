@@ -24,10 +24,16 @@ enum atom_memory_error atom_memory_open(const atom_rom *rom,atom_memory *out){
             .type=p[type_offset],.channels=p[type_offset+1],.modules=t.bytes[20]};
         unsigned log2_bits=p[type_offset+2];
         if(m.type!=0x70 || m.channels<1 || m.channels>16 || log2_bits<4 || log2_bits>6 ||
-           !m.memory_mb || m.memory_mb>65536 || !m.channel_enable)return ATOM_MEMORY_GEOMETRY;
+           !m.memory_mb || m.memory_mb>65536)return ATOM_MEMORY_GEOMETRY;
         m.channel_bytes=(uint8_t)((1u<<log2_bits)/8);
-        if(n && memcmp(&first,&m,sizeof(m)))return ATOM_MEMORY_AMBIGUOUS;
-        first=m;offset+=size;
+        /* Linux ignores channel_enable; with several modules it is a per-module mask (disjoint bits). Only the
+         * geometry has to agree; the capacities add up. */
+        if(n){
+            if(first.type!=m.type || first.channels!=m.channels || first.channel_bytes!=m.channel_bytes)return ATOM_MEMORY_AMBIGUOUS;
+            if((uint64_t)first.memory_mb+m.memory_mb>UINT32_MAX)return ATOM_MEMORY_GEOMETRY;
+            first.memory_mb+=m.memory_mb;first.channel_enable|=m.channel_enable;
+        }else first=m;
+        offset+=size;
     }
     *out=first;return ATOM_MEMORY_OK;
 }

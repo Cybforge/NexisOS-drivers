@@ -7,6 +7,9 @@ void nx_log_attach(const nexis_gpu_services *services) {
     log_services = (services && services->size >= NEXIS_GPU_SERVICES_LOG_BYTES && services->log) ? services : 0;
 }
 
+/* True when a log sink is attached (diagnostic dumps only make sense then). */
+bool nx_log_enabled(void) { return log_services != 0; }
+
 #define LINE 200u
 
 static void put(char *line, unsigned *n, char c) {

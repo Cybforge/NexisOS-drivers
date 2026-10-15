@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v1 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v3 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,36 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Paket v3 (2026-10-15): zweite Fehlersuche vor dem nächsten Hardwarelauf
+
+Eine erneute, gezielte Durchsicht der ganzen RX6600-Kette gegen das, was eine **nur vom Video-BIOS/GOP initialisierte**
+Karte tatsächlich liefert (nicht gegen das, was Linux-DC nach seinem eigenen Init vorfindet). Behoben, jeweils mit
+angepassten Modelltests (alle Host-Tests grün; auf echter Hardware weiterhin **nicht** geprüft):
+
+* **GPIO-Pin-Tabelle** wurde mit falschem Eintragsformat gelesen (8 Byte/u32-Index statt 6 Byte/u16-Index) → falsche
+  HPD-/DDC-Pins. Das war die wahrscheinlichste Ursache für ein Scheitern an „finding the HDMI output“.
+* **Surface-Bindung:** VRAM-Offset aus `FB_BASE` statt `FB_OFFSET`; Statusregister werden maskiert verglichen;
+  ein klebriger HUBP-Underflow-Status macht die GOP-Fläche nicht mehr „nicht unterstützt“.
+* **VBIOS:** Abbild-Prüfsumme und PCIR-Geräte-ID werden nur gemeldet, nicht mehr erzwungen (Board-Partner-Abbilder);
+  keine 1-MiB-Obergrenze mehr; VRAM-Tabelle (`channel_enable` wird von Linux nicht genutzt, mehrere Module addieren sich);
+  `dpphy_refclk = 0` ist erlaubt.
+* **Pixeltakt-Messung** mit Wiederholung bei einer einzelnen Abtastlücke; **`alive()`** schlägt nach einer langen
+  Pause ohne Poll nicht mehr dauerhaft fehl (Neuabtastung).
+* **SMU-Postfach:** das Antwortregister einer nie benutzten Karte darf anfangs 0 sein (Linux ignoriert diese Wartezeit);
+  Header-/Interface-Version werden nur noch geloggt; Feature-Wort wird wie unter Linux maskiert.
+* **HPD:** „verbunden“ aus dem Live-`SENSE`-Bit (nicht mehr `SENSE == SENSE_DELAYED`); ein kurzer HPD-Puls
+  (Eingangswechsel, HDMI-Re-Auth) beendet den Treiber nicht, erst 3 s Dauer-Low; `DIG_HPD_SELECT` der Firmware ist nicht
+  maßgeblich, der Pin aus dem BIOS-Objekt ist es.
+* **DFS:** Teiler-ID < 8 wird wie unter Linux auf 8 angehoben statt abgelehnt.
+* **Diagnose:** jeder Abbruch schreibt eine Registerübersicht ins Kernel-Log (Framebuffer-Fenster, SMU-Postfach,
+  DFS/Dentist/DTO, HUBBUB-Referenztakt, DIG/HPD je Verbindung, OTG-/HUBP-Zustand je Pipe) und die rohen SMU-Antworten.
+* Der Kernel merkt sich eine abgelehnte Probezeit-Version (`declined`), damit nach „Esc/Revert“ nicht sofort neu gestartet wird.
+
+**Weiterhin offen / ungeprüft:** der HUBBUB-Referenztakt (`REFCLK_CNTL`/`GLOBAL_TIMER`) wird verlangt, wie ihn Linux-DC
+programmiert; hat die Firmware ihn nicht so hinterlassen, hält der Treiber dort an (das Register wird im Log
+ausgegeben). Mehrere gleichzeitig aktive Monitore/OTGs bleiben bewusst nicht unterstützt (Ambiguität → Firmware-Bild).
+Alles andere (Taktfolge, Modus-Wechsel, HDMI-Audio) ist nur gegen Registermodelle bewiesen.
 
 ## Erster Test auf der echten Karte
 

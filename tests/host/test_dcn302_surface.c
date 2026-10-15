@@ -31,7 +31,7 @@ static void init(model *m,dcn302_io *io,dcn302_route *route,unsigned opp,unsigne
     r[DCN302_SURFACE_R_CROSSBAR]=SET(SET(SET(0,RED,format?3:2),GREEN,1),BLUE,format?2:3);
     r[DCN302_SURFACE_R_PITCH]=2047;r[DCN302_SURFACE_R_ADDRESS]=0x200000;r[DCN302_SURFACE_R_ADDRESS_HIGH]=(uint32_t)(physical>>32);
     r[DCN302_SURFACE_R_INUSE]=0x200000;r[DCN302_SURFACE_R_INUSE_HIGH]=(uint32_t)(physical>>32);
-    m->base=0x9000;m->top=0x91ff;m->offset=(uint32_t)(physical>>24);
+    m->base=(uint32_t)(physical>>24);m->top=m->base+0x1ff;m->offset=0x4000; /* FB_OFFSET (BAR address) is not part of the MC-to-offset conversion */
 }
 static enum dcn302_surface_error bind(model *m,dcn302_io *io,dcn302_route *r,unsigned format,dcn302_surface *out){
     enum dcn302_surface_error e=dcn302_surface_bind(io,r,bar,bar_bytes,gop,gop_bytes,2048,format,out);CHECK(!m->invalid);return e;
@@ -44,8 +44,14 @@ static void normal(void){
     }
     /* Resizable BAR is independently bounded; no 256-MB assumption. */
     init(&m,&io,&r,0,2,4,1);CHECK(dcn302_surface_bind(&io,&r,bar,0x200000000ULL,gop,gop_bytes,2048,1,&s)==DCN302_SURFACE_OK);cases++;
-    /* Identity physical/memory-controller address is allowed but not required. */
-    init(&m,&io,&r,0,2,4,1);m.base=m.offset;m.top=m.base+511;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
+    /* A latched underflow and gated-off DISP/DPP clock status bits (firmware leaves them like this) do not make the surface unusable. */
+    init(&m,&io,&r,0,2,4,1);m.regs[4][DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_UNDERFLOW_MASK;
+    m.regs[4][DCN302_SURFACE_R_CLOCK]=DCN302_SURFACE_CLOCK_ENABLE_MASK;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
+    /* A latched underflow and gated-off DISP/DPP clock status bits (firmware leaves them like this) do not make the surface unusable. */
+    init(&m,&io,&r,0,2,4,1);m.regs[4][DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_UNDERFLOW_MASK;
+    m.regs[4][DCN302_SURFACE_R_CLOCK]=DCN302_SURFACE_CLOCK_ENABLE_MASK;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
+    /* FB_OFFSET equal to FB_BASE is allowed but not required. */
+    init(&m,&io,&r,0,2,4,1);m.offset=m.base;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
 }
 static void invalid(void){
     model m;dcn302_io io;dcn302_route r;dcn302_surface s,zero={0};
@@ -58,13 +64,13 @@ static void invalid(void){
             case 5:h[DCN302_SURFACE_R_CONFIG]=10;break;case 6:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ROTATION_MASK;break;
             case 7:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_MIRROR_MASK;break;case 8:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ALPHA_MASK;break;
             case 9:h[DCN302_SURFACE_R_TILING]=1;break;case 10:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_BLANK_MASK;break;
-            case 11:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_TTU_DISABLE_MASK;break;case 12:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_UNDERFLOW_MASK;break;
-            case 13:h[DCN302_SURFACE_R_CLOCK]=0;break;case 14:h[DCN302_SURFACE_R_CLOCK]&=~DCN302_SURFACE_DPP_ON_MASK;break;
+            case 11:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_TTU_DISABLE_MASK;break;case 12:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_BLANK_MASK|DCN302_SURFACE_UNDERFLOW_MASK;break;
+            case 13:h[DCN302_SURFACE_R_CLOCK]=0;break;case 14:h[DCN302_SURFACE_R_CLOCK]&=~DCN302_SURFACE_CLOCK_ENABLE_MASK;break;
             case 15:h[DCN302_SURFACE_R_CONTROL]=DCN302_SURFACE_DCC_MASK;break;case 16:h[DCN302_SURFACE_R_CONTROL]=DCN302_SURFACE_TMZ_MASK;break;
             case 17:h[DCN302_SURFACE_R_INUSE_HIGH]|=DCN302_SURFACE_VMID_MASK;break;case 18:h[DCN302_SURFACE_R_VIEW_START]=1;break;
             case 19:h[DCN302_SURFACE_R_VIEW_SIZE]=0;break;case 20:h[DCN302_SURFACE_R_PITCH]++;break;
             case 21:h[DCN302_SURFACE_R_CROSSBAR]=0;break;case 22:h[DCN302_SURFACE_R_ADDRESS]++;break;
-            case 23:m.top=m.base-1;break;case 24:m.offset++;break;
+            case 23:m.top=m.base-1;break;case 24:m.base++;break; /* address below FB_BASE */
             case 25:h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x0fc00000;break;
             case 26:m.top=m.base;h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x1000000;break;
         }

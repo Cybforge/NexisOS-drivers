@@ -1,6 +1,6 @@
 #include "dcn302_clock.h"
 #include <string.h>
-enum dcn302_error dcn302_clock_measure(const dcn302_io *io,unsigned pipe,uint64_t (*time_us)(void *),unsigned frames,dcn302_clock_measurement *out){
+static enum dcn302_error measure_once(const dcn302_io *io,unsigned pipe,uint64_t (*time_us)(void *),unsigned frames,dcn302_clock_measurement *out,bool *transient){
     if(!out)return DCN302_INPUT;
     memset(out,0,sizeof(*out));
     if(!io || !io->read || !io->delay_us || !time_us || pipe>=5 || frames<8 || frames>32)return DCN302_INPUT;
@@ -27,12 +27,12 @@ enum dcn302_error dcn302_clock_measure(const dcn302_io *io,unsigned pipe,uint64_
         if(after-start>2000000)return DCN302_TIMEOUT;
         unsigned delta=(count-previous)&DCN302_FRAME_COUNT_MASK;
         if(delta){
-            if(delta!=1 || after-previous_before>16)return DCN302_READBACK;
+            if(delta!=1 || after-previous_before>16){*transient=true;return DCN302_READBACK;} /* interrupt/SMI across the edge, or a missed frame */
             uint64_t width=after-previous_before,edge=previous_before+width/2;
             if(!edges){first_edge=edge;first_width=width;}
             else {
                 uint64_t period=edge-last_edge;
-                if(!period || period<1000 || period>50000)return DCN302_READBACK;
+                if(!period || period<1000 || period>50000){*transient=true;return DCN302_READBACK;}
                 if(period<minimum_period)minimum_period=period;
                 if(period>maximum_period)maximum_period=period;
             }
@@ -49,11 +49,11 @@ enum dcn302_error dcn302_clock_measure(const dcn302_io *io,unsigned pipe,uint64_
        final.registers[DCN302_R_V_MAX]!=initial.registers[DCN302_R_V_MAX] ||
        final.registers[DCN302_R_V_CONTROL]!=vcontrol ||
        final.registers[DCN302_R_SOURCE]!=initial.registers[DCN302_R_SOURCE])return DCN302_READBACK;
-    if(maximum_period-minimum_period>16+minimum_period/5000)return DCN302_READBACK;
+    if(maximum_period-minimum_period>16+minimum_period/5000){*transient=true;return DCN302_READBACK;}
     uint64_t elapsed=last_edge-first_edge;
     if(!elapsed)return DCN302_READBACK;
     uint64_t uncertainty=((first_width+last_width+2)*1000000+elapsed-1)/elapsed;
-    if(uncertainty>1000)return DCN302_READBACK;
+    if(uncertainty>1000){*transient=true;return DCN302_READBACK;}
     uint64_t pixels=(uint64_t)first.htotal*first.vtotal;
     uint64_t clock=(pixels*frames*1000+elapsed/2)/elapsed;
     uint64_t refresh=((uint64_t)frames*1000000000+elapsed/2)/elapsed;
@@ -61,4 +61,16 @@ enum dcn302_error dcn302_clock_measure(const dcn302_io *io,unsigned pipe,uint64_
     out->pixel_khz=(uint32_t)clock;out->refresh_millihz=(uint32_t)refresh;
     out->uncertainty_ppm=(uint32_t)uncertainty;out->frames=frames;out->elapsed_us=elapsed;
     return DCN302_OK;
+}
+
+/* A timer interrupt, SMI or bus stall that lands across a frame edge makes one measurement unusable (an edge wider than
+ * 16 us, or a period outside the tolerance). That says nothing about the display: measure again, up to four times. */
+enum dcn302_error dcn302_clock_measure(const dcn302_io *io,unsigned pipe,uint64_t (*time_us)(void *),unsigned frames,dcn302_clock_measurement *out){
+    enum dcn302_error e=DCN302_READBACK;
+    for(unsigned attempt=0;attempt<4;attempt++){
+        bool transient=false;
+        e=measure_once(io,pipe,time_us,frames,out,&transient);
+        if(!transient)break;           /* only timing noise is worth another try; a changed display or a stopped counter is not */
+    }
+    return e;
 }

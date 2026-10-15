@@ -23,17 +23,23 @@
 enum {MSG_TEST=1,MSG_VERSION=2,MSG_INTERFACE=3,MSG_HEADER=4,MSG_MIN=9,MSG_DPM=11};
 static bool supported(unsigned clock){return clock==1 || clock==2 || (clock>=8 && clock<=11);}
 static bool error(dcn302_smu *s,enum dcn302_smu_error e,bool poison){s->error=e;s->poisoned|=poison;return false;}
-static bool wait_response(dcn302_smu *s,uint32_t *response){
+/* soft: the very first wait of a command. A card that was only POSTed by the video BIOS never received a DAL message,
+ * so its response register can legitimately still be 0; Linux (dcn30_smu_wait_for_response) ignores that wait's result,
+ * so a timeout there is "idle mailbox", not an error, and not a reason to poison it. */
+static bool wait_response(dcn302_smu *s,uint32_t *response,bool soft){
     uint64_t start=s->time_us(s->io.context),last=start;
-    for(unsigned n=0;n<=200000;n++){
+    const unsigned limit=soft?2000u:200000u;const uint64_t window=soft?20000u:2000000u;
+    for(unsigned n=0;n<=limit;n++){
         uint64_t now=s->time_us(s->io.context);
-        if(now<last || now-start>2000000)return error(s,now<last?DCN302_SMU_PROTOCOL:DCN302_SMU_TIMEOUT,true);
+        if(now<last)return error(s,DCN302_SMU_PROTOCOL,true);
+        if(now-start>window){if(soft){*response=0;return true;}return error(s,DCN302_SMU_TIMEOUT,true);}
         last=now;
         if(!s->io.read(s->io.context,DCN302_SMU_RESPONSE_BYTES,response))return error(s,DCN302_SMU_IO,true);
         if(*response)return true;
-        if(n==200000)return error(s,DCN302_SMU_TIMEOUT,true);
+        if(n==limit){if(soft){*response=0;return true;}return error(s,DCN302_SMU_TIMEOUT,true);}
         if(!s->io.delay_us(s->io.context,10))return error(s,DCN302_SMU_IO,true);
     }
+    if(soft){*response=0;return true;}
     return error(s,DCN302_SMU_TIMEOUT,true);
 }
 static bool response_status(dcn302_smu *s,uint32_t r){
@@ -61,10 +67,10 @@ static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out
     s->busy=true;s->error=DCN302_SMU_OK;s->dispatched=false;
     uint32_t prior_response,prior_argument,value;
     bool result=false;
-    if(!wait_response(s,&prior_response))goto done;
+    if(!wait_response(s,&prior_response,true))goto done;
     /* A completed previous error is a ready mailbox too; it belongs to the
      * prior caller. Unrecognized status values do not authorize takeover. */
-    if(prior_response!=1 && (prior_response<0xfc || prior_response>0xff)){error(s,DCN302_SMU_PROTOCOL,true);goto done;}
+    if(prior_response!=0 && prior_response!=1 && (prior_response<0xfc || prior_response>0xff)){error(s,DCN302_SMU_PROTOCOL,true);goto done;}
     if(!s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,&prior_argument)){error(s,DCN302_SMU_IO,true);goto done;}
     if(!s->io.write(s->io.context,DCN302_SMU_RESPONSE_BYTES,0) ||
        !s->io.read(s->io.context,DCN302_SMU_RESPONSE_BYTES,&value) || value ||
@@ -78,8 +84,9 @@ static bool send(dcn302_smu *s,unsigned message,uint32_t parameter,uint32_t *out
      * completion or resend/reset its mailbox; the owner must prove state. */
     s->dispatched=true;
     if(!s->io.write(s->io.context,DCN302_SMU_MESSAGE_BYTES,message)){error(s,DCN302_SMU_IO,true);goto done;}
-    if(!wait_response(s,&value) || !response_status(s,value))goto done;
+    if(!wait_response(s,&value,false) || !response_status(s,s->raw_response=value))goto done;
     if(!s->io.read(s->io.context,DCN302_SMU_ARGUMENT_BYTES,out)){error(s,DCN302_SMU_IO,true);goto done;}
+    s->raw_value=*out;
     result=true;
 done:
     s->busy=false;if(!result)*out=0;else s->error=DCN302_SMU_OK;return result;
@@ -91,14 +98,15 @@ bool dcn302_smu_open(dcn302_smu *s,const dcn302_io *io,uint64_t (*time_us)(void 
     s->io=*io;s->time_us=time_us;
     uint32_t value;
     if(!send(s,MSG_TEST,0x4e455849,&value))return false;
+    s->raw_test=value;
     if(value!=0x4e45584a)return error(s,DCN302_SMU_PROTOCOL,true);
     if(!send(s,MSG_VERSION,0,&value))return false;
     if(!value || value==UINT32_MAX)return error(s,DCN302_SMU_VERSION,false);
     s->version=value;
     if(!send(s,MSG_HEADER,0,&value))return false;
-    if(value!=1)return error(s,DCN302_SMU_VERSION,false);
+    s->raw_header=value;s->header_mismatch=value!=1;
     if(!send(s,MSG_INTERFACE,0,&value))return false;
-    if(value!=DCN302_SMU_INTERFACE)return error(s,DCN302_SMU_VERSION,false);
+    s->raw_interface=value;s->interface_mismatch=value!=DCN302_SMU_INTERFACE;
     s->ready=true;s->error=DCN302_SMU_OK;return true;
 }
 bool dcn302_smu_clock_limits(dcn302_smu *s,enum dcn302_smu_clock clock,dcn302_smu_limits *out){
@@ -111,12 +119,12 @@ bool dcn302_smu_clock_limits(dcn302_smu *s,enum dcn302_smu_clock clock,dcn302_sm
     uint32_t features;
     if(!send(s,MSG_DPM,(uint32_t)clock<<16|0xff,&features))return false;
     unsigned count=features&0xff;bool fine=(features&0x80000000u)!=0;
-    if(!count || count>DCN302_SMU_MAX_LEVELS || (features&~0xf00000ffu) || (fine && count!=2))return error(s,DCN302_SMU_PROTOCOL,false);
-    dcn302_smu_limits limits={0};limits.count=(uint8_t)count;limits.features=features;limits.fine_grained=fine;
+    if(!count || count>DCN302_SMU_MAX_LEVELS || (fine && count!=2))return error(s,DCN302_SMU_PROTOCOL,false);   /* Linux uses only bit 31 and the low byte */
+    dcn302_smu_limits limits={0};limits.count=(uint8_t)count;limits.features=features&0x800000ffu;limits.fine_grained=fine;
     for(unsigned n=0;n<count;n++){
         uint32_t mhz;
         if(!send(s,MSG_DPM,(uint32_t)clock<<16|n,&mhz))return false;
-        if(!mhz || mhz>UINT16_MAX || (n && mhz<=limits.frequency_mhz[n-1]))return error(s,DCN302_SMU_PROTOCOL,false);
+        if(!mhz || mhz>UINT16_MAX || (n && mhz<limits.frequency_mhz[n-1]))return error(s,DCN302_SMU_PROTOCOL,false);
         limits.frequency_mhz[n]=(uint16_t)mhz;
     }
     limits.valid=true;s->clocks[clock]=limits;*out=limits;return true;

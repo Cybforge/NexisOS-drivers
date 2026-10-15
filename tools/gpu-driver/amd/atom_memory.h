@@ -7,8 +7,8 @@ typedef struct {
     uint8_t type,channels,channel_bytes,modules;
 } atom_memory;
 /* Read-only GDDR6 topology from VRAM_INFO 2.3/2.4/2.5 (master data 2.1,
- * index 28). Every advertised module must agree on geometry, capacity and
- * channel mask; no guessed module selection/clock/MC reconfiguration.
+ * index 28). Every advertised module must agree on type and geometry (capacities add up;
+ * the channel mask is not used); no guessed module selection/clock/MC reconfiguration.
  * Does not prove current MC state or authorize a hardware modeset. */
 enum atom_memory_error atom_memory_open(const atom_rom *,atom_memory *);
 #endif

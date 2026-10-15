@@ -9,6 +9,7 @@ static bool master(const uint8_t *image,size_t size,unsigned off){
     return off && extent(size,off,4) && u16(image+off)>=4 && !(u16(image+off)&1) && extent(size,off,u16(image+off));
 }
 bool atom_rom_open(const uint8_t *bytes,size_t size,uint16_t vendor,uint16_t device,atom_rom *out){
+    (void)device;
     if(!out)return false;
     memset(out,0,sizeof(*out));
     if(!bytes || size<512 || size>1024*1024 || vendor!=0x1002)return false;
@@ -20,14 +21,14 @@ bool atom_rom_open(const uint8_t *bytes,size_t size,uint16_t vendor,uint16_t dev
         unsigned pci_length=u16(image+pcir+10),length=u16(image+pcir+16)*512;
         if(pci_length<24 || !length || length>remaining || !extent(length,pcir,pci_length))return false;
         unsigned atom=u16(image+0x48);
-        if(image[pcir+20]==0 && u16(image+pcir+4)==vendor && u16(image+pcir+6)==device &&
+        if(image[pcir+20]==0 && u16(image+pcir+4)==vendor && /* PCIR device id not compared: board partners and refreshes (73FF / 73EF) reuse images; the module checked the PCI id already */
            extent(length,atom,36) && (!memcmp(image+atom+4,"ATOM",4) || !memcmp(image+atom+4,"MOTA",4))){
             unsigned header_size=u16(image+atom);
             if(header_size<36 || !extent(length,atom,header_size))return false;
-            unsigned sum=0;for(unsigned i=0;i<length;i++)sum+=image[i];if(sum&255)return false;
+            unsigned sum=0;for(unsigned i=0;i<length;i++)sum+=image[i]; /* informational only: a ROM that the firmware or a flasher touched can fail it although the tables are fine */
             unsigned commands=u16(image+atom+30),data=u16(image+atom+32);
             if(!master(image,length,commands) || !master(image,length,data))return false;
-            out->image=image;out->size=length;out->commands=(uint16_t)commands;out->data=(uint16_t)data;return true;
+            out->image=image;out->size=length;out->commands=(uint16_t)commands;out->data=(uint16_t)data;out->checksum_ok=!(sum&255);return true;
         }
         if(image[pcir+21]&128)return false;
         off+=length;

@@ -97,6 +97,9 @@ static void reject(void){
             case 21:m.dto[0]=(m.dto[0]&~0xff00ffu)|255|(128u<<16);break;
             case 22:io.read=NULL;break;case 23:m.dentist=(m.dentist&~127u)|7;break;case 24:m.dentist=(m.dentist&~DCN302_DFS_DPP_WRITE_MASK)|(7u<<24);break;
         }
+        if(fault==5 || fault==24){   /* a DPPCLK divider id below 8 is clamped to 8 like Linux does, not rejected */
+            CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_OK && s.valid && s.dpp_khz==s.vco_khz*4/8 && !m.writes);cases++;continue;
+        }
         memset(&s,0xa5,sizeof(s));CHECK(dcn302_dfs_read(&io,&s)!=DCN302_DFS_OK && !memcmp(&s,&zero,sizeof(s)) && !m.writes);cases++;
     }
     for(unsigned n=1;n<=16;n++){init(&m,&io,&smu);m.fail_read=n;CHECK(dcn302_dfs_read(&io,&s)==DCN302_DFS_IO && !memcmp(&s,&zero,sizeof(s)));cases++;}

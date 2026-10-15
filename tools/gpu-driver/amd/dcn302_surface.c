@@ -24,7 +24,7 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
     for(unsigned r=DCN302_SURFACE_R_CONFIG;r<DCN302_SURFACE_REGISTER_COUNT;r++)if(!rd(io,hubp,(enum dcn302_surface_register)r,&regs[r]))return DCN302_SURFACE_IO;
     uint32_t c=regs[DCN302_SURFACE_R_CONFIG],clock=regs[DCN302_SURFACE_R_CLOCK],ctl=regs[DCN302_SURFACE_R_HUBP];
     if(GET(c,FORMAT)!=8 || GET(c,ROTATION) || GET(c,MIRROR) || GET(c,ALPHA) || GET(regs[DCN302_SURFACE_R_TILING],SW_MODE) ||
-       GET(ctl,BLANK) || GET(ctl,TTU_DISABLE) || GET(ctl,UNDERFLOW) || !GET(clock,CLOCK_ENABLE) || !GET(clock,DISP_ON) || !GET(clock,DPP_ON) ||
+       GET(ctl,BLANK) || GET(ctl,TTU_DISABLE) || !GET(clock,CLOCK_ENABLE) || /* UNDERFLOW is a latched status (Linux clears it), DISP_ON/DPP_ON follow clock gating: neither says the surface is unusable */
        GET(regs[DCN302_SURFACE_R_CONTROL],DCC) || GET(regs[DCN302_SURFACE_R_CONTROL],TMZ) || GET(regs[DCN302_SURFACE_R_INUSE_HIGH],VMID))return DCN302_SURFACE_UNSUPPORTED;
     if(GET(regs[DCN302_SURFACE_R_VIEW_START],X) || GET(regs[DCN302_SURFACE_R_VIEW_START],Y) ||
        GET(regs[DCN302_SURFACE_R_VIEW_SIZE],WIDTH)!=route->shape.hactive || GET(regs[DCN302_SURFACE_R_VIEW_SIZE],HEIGHT)!=route->shape.vactive ||
@@ -39,10 +39,13 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
        !io->read(io->context,DCN302_FB_OFFSET_BYTES,&fb_offset))return DCN302_SURFACE_IO;
     uint64_t start=(uint64_t)((fb_base&DCN302_FB_BASE_MASK)>>DCN302_FB_BASE_SHIFT)<<24;
     uint64_t end=((uint64_t)((fb_top&DCN302_FB_TOP_MASK)>>DCN302_FB_TOP_SHIFT)+1)<<24;
-    uint64_t physical=(uint64_t)((fb_offset&DCN302_FB_OFFSET_MASK)>>DCN302_FB_OFFSET_SHIFT)<<24;
+    /* The surface address is a GPU (MC) address inside [FB_BASE,FB_TOP]; the offset into the VRAM aperture (BAR0) is
+     * address - FB_BASE (amdgpu: mc2pa = mc - vram_start). FB_OFFSET is the aperture's CPU physical base that
+     * amdgpu programs for the display hub, not something to subtract from an MC address (on RDNA2 FB_BASE is
+     * typically 0x8000000000 while FB_OFFSET is the BAR address). */
     uint64_t length=(uint64_t)pitch*4*route->shape.vactive;
-    if(end<=start || !length || actual<physical)return DCN302_SURFACE_BOUNDS;
-    uint64_t relative=actual-physical,capacity=end-start;
+    if(end<=start || !length || actual<start || actual>=end)return DCN302_SURFACE_BOUNDS;
+    uint64_t relative=actual-start,capacity=end-start;
     if(relative>capacity || length>capacity-relative || relative>bar_bytes || length>bar_bytes-relative ||
        bar_base+relative!=gop_base || length>gop_bytes)return DCN302_SURFACE_BOUNDS;
     /* Whole read-only identity is sampled again; caller serializes operations.
@@ -55,8 +58,12 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
     for(unsigned i=0;i<4;i++){if(!rd(io,mpcc,ids[i],&now))return DCN302_SURFACE_IO;if(now!=values[i])return DCN302_SURFACE_CHANGED;}
     for(unsigned r=DCN302_SURFACE_R_CONFIG;r<DCN302_SURFACE_REGISTER_COUNT;r++){
         if(!rd(io,hubp,(enum dcn302_surface_register)r,&now))return DCN302_SURFACE_IO;
-        /* Underflow/status/clock changes invalidate takeover too. */
-        if(now!=regs[r])return DCN302_SURFACE_CHANGED;
+        /* Configuration must not change between the two reads; live status bits (outstanding requests, underflow, clock-gating
+         * state) toggle while the pipe scans out and are excluded, otherwise the check fails on its own. */
+        uint32_t mask=0xffffffffu;
+        if(r==DCN302_SURFACE_R_HUBP)mask=DCN302_SURFACE_BLANK_MASK|DCN302_SURFACE_TTU_DISABLE_MASK;
+        else if(r==DCN302_SURFACE_R_CLOCK)mask=DCN302_SURFACE_CLOCK_ENABLE_MASK;
+        if((now^regs[r])&mask)return DCN302_SURFACE_CHANGED;
     }
     uint32_t fb[3]={fb_base,fb_top,fb_offset},offsets[3]={DCN302_FB_BASE_BYTES,DCN302_FB_TOP_BYTES,DCN302_FB_OFFSET_BYTES};
     for(unsigned i=0;i<3;i++){if(!io->read(io->context,offsets[i],&now))return DCN302_SURFACE_IO;if(now!=fb[i])return DCN302_SURFACE_CHANGED;}

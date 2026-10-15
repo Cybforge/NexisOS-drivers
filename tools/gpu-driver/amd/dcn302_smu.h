@@ -17,6 +17,9 @@ typedef struct {
     dcn302_io io;uint64_t (*time_us)(void *);
     uint32_t version;bool ready,busy,poisoned,dispatched;
     enum dcn302_smu_error error;
+    /* Raw replies kept for diagnosis (logged by the owner on any failure). Header and driver-interface numbers are
+     * only reported: Linux reads them and ignores a mismatch (dcn30_clk_mgr: "TODO: Check we get what we expect"). */
+    uint32_t raw_test,raw_header,raw_interface,raw_response,raw_value;bool header_mismatch,interface_mismatch;
     dcn302_smu_limits clocks[13];
     uint16_t floor_mhz[13];bool floor_known[13];
 } dcn302_smu;

@@ -86,7 +86,7 @@ typedef struct {
     uint32_t modeset_count;
     nexis_gpu_resource vram,registers;
     uint32_t fixed_rate[3]; /* V_TOTAL_CONTROL, V_TOTAL_MIN, V_TOTAL_MAX */
-    uint64_t sampled_us;uint32_t sampled_frame;
+    uint64_t sampled_us,hpd_lost_us;uint32_t sampled_frame;
     bool ready,busy;
     enum rx6600_error error;
 } rx6600_state;

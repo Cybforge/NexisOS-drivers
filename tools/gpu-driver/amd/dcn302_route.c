@@ -21,9 +21,10 @@ enum dcn302_route_error dcn302_route_connected(const dcn302_io *io,const atom_bo
     if(!io || !io->read || !p || !connected || hpd>=5 || p->hpd_state>1)return DCN302_ROUTE_INPUT;
     unsigned actual;if(!hpd_index(p,&actual) || actual!=hpd)return DCN302_ROUTE_UNSUPPORTED;
     uint32_t value;if(!io->read(io->context,dcn302_hpd_status_bytes[hpd],&value))return DCN302_ROUTE_IO;
+    /* SENSE is the live pin level (what Linux reads through the HPD GPIO). SENSE_DELAYED is the debounced copy and only
+     * follows when firmware enabled the HPD block, which a card initialised by the video BIOS / GOP need not have done:
+     * demanding SENSE == SENSE_DELAYED would reject a perfectly connected monitor. */
     unsigned sense=(value&DCN302_HPD_SENSE_MASK)>>DCN302_HPD_SENSE_SHIFT;
-    unsigned delayed=(value&DCN302_HPD_DELAYED_MASK)>>DCN302_HPD_DELAYED_SHIFT;
-    if(sense!=delayed)return DCN302_ROUTE_CHANGED;
     *connected=sense==p->hpd_state;return DCN302_ROUTE_OK;
 }
 enum dcn302_route_error dcn302_route_find(const dcn302_io *io,const atom_board *board,unsigned width,unsigned height,dcn302_route *out){
@@ -46,15 +47,17 @@ enum dcn302_route_error dcn302_route_find(const dcn302_io *io,const atom_board *
         if(!mask || mask>16 || (mask&(mask-1)))return DCN302_ROUTE_UNSUPPORTED;
         while((1u<<stream)!=mask)stream++;
         uint32_t fe;if(!read(io,stream,DCN302_HDMI_R_FE,&fe))return DCN302_ROUTE_IO;
-        unsigned otg=HG(fe,PIPE),hpd=HG(be,HPD);
-        if(otg>=5 || hpd>=5 || HG(fe,RGB_ENCODING) || HG(fe,COLOR_FORMAT))return DCN302_ROUTE_UNSUPPORTED;
+        unsigned otg=HG(fe,PIPE),hpd=0;
+        /* DIG_HPD_SELECT is a mux the driver normally programs itself (Linux dcn10_link_encoder); firmware may leave any
+         * value. The video BIOS object record names the real HPD pin of the connector, so that one is authoritative. */
+        if(otg>=5 || HG(fe,RGB_ENCODING) || HG(fe,COLOR_FORMAT))return DCN302_ROUTE_UNSUPPORTED;
         unsigned matches=0;
         for(unsigned path=0;path<board->count;path++){
             const atom_board_path *p=&board->paths[path];unsigned pin,bus;
             if(p->kind!=ATOM_BOARD_HDMI || !p->internal_phy || p->external_encoder || p->phy!=i)continue;
-            if(!hpd_index(p,&pin) || pin!=hpd || !ddc_index(p,&bus))continue;
+            if(!hpd_index(p,&pin) || !ddc_index(p,&bus))continue;
             if(++matches>1)return DCN302_ROUTE_AMBIGUOUS;
-            result.path=path;result.ddc=bus;
+            result.path=path;result.ddc=bus;hpd=pin;
         }
         if(!matches)return DCN302_ROUTE_UNSUPPORTED;
         const atom_board_path *p=&board->paths[result.path];bool connected;

@@ -32,6 +32,7 @@ uint32_t fb_get_pitch(void){CHECK(false);return 0;}uint32_t fb_get_width(void){C
 bool fb_is_rgb(void){CHECK(false);return false;}
 bool fb_native_activate(uint64_t b,uint32_t p,uint32_t f,const char *s){(void)b;(void)p;(void)f;(void)s;CHECK(false);return false;}
 void sha256_hash(const void *p,size_t n,uint8_t out[32]){(void)p;(void)n;(void)out;CHECK(false);}
+const char *tr(const char *s){return s;}   /* runtime.c translates a few log fragments */
 static unsigned log_lines;
 int kprintf(const char *fmt,...){(void)fmt;log_lines++;return 0;} /* resource() reports the first rejection per load */
 static void init(void){

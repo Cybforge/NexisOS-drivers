@@ -11,12 +11,12 @@ static uint32_t u32(const uint8_t *p){return (uint32_t)p[0]|(uint32_t)p[1]<<8|(u
 static unsigned path_at(unsigned i){return 408+i*16;}
 static unsigned records_at(unsigned count,unsigned i){return 408+count*16+i*24;}
 static void init(unsigned revision,unsigned count,atom_rom *rom){
-    memset(bytes,0,sizeof(bytes));*rom=(atom_rom){bytes,sizeof(bytes),80,100};
+    memset(bytes,0,sizeof(bytes));*rom=(atom_rom){bytes,sizeof(bytes),80,100,true};
     p16(80,18);p16(100,64);bytes[102]=2;bytes[103]=1;
     p16(104+12*2,200);p16(104+22*2,400);p16(104+27*2,1600);
-    p16(200,4+8*7);bytes[202]=2;bytes[203]=1;
+    p16(200,4+6*7);bytes[202]=2;bytes[203]=1;
     for(unsigned i=0;i<7;i++){
-        p32(204+i*8,0x40000+i*4);bytes[208+i*8]=i;bytes[209+i*8]=i+1;bytes[210+i*8]=(uint8_t)(i<6?0x90+i:5);
+        p16(204+i*6,0x4000+i*4);bytes[206+i*6]=i;bytes[207+i*6]=i+1;bytes[208+i*6]=(uint8_t)(i<6?0x90+i:5);
     }
     p16(400,8+count*40);bytes[402]=1;bytes[403]=(uint8_t)revision;p16(404,0xec8);bytes[406]=(uint8_t)count;
     for(unsigned i=0;i<count;i++){
@@ -41,15 +41,15 @@ static void normal(void){
         CHECK(b.reference_khz==27000 && b.i2c_reference_khz==27000 && b.phy_reference_khz==27000 && b.boot_display_khz==600000);
         CHECK(b.pipes==5 && b.phys==6 && b.paths[0].connector==0x310c && b.paths[0].encoder==0x211e);
         CHECK(b.paths[0].internal_phy && b.paths[0].phy==0 && b.paths[0].ddc_hardware && b.paths[0].ddc_engine==1 && b.paths[0].ddc_line==0);
-        CHECK(b.paths[0].ddc_gpio.index==0x40000 && b.paths[0].ddc_gpio.shift==0 && b.paths[0].ddc_gpio.mask_shift==1);
-        CHECK(b.paths[0].has_hpd && b.paths[0].hpd_gpio.index==0x40018 && b.paths[0].hpd_gpio.shift==6 && b.paths[0].hpd_state==1);
+        CHECK(b.paths[0].ddc_gpio.index==0x4000 && b.paths[0].ddc_gpio.shift==0 && b.paths[0].ddc_gpio.mask_shift==1);
+        CHECK(b.paths[0].has_hpd && b.paths[0].hpd_gpio.index==0x4018 && b.paths[0].hpd_gpio.shift==6 && b.paths[0].hpd_state==1);
         CHECK(b.paths[0].has_encoder_caps && b.paths[0].encoder_caps==12);cases++;
     }
     unsigned ids[]={0x211e,0x221e,0x2120,0x2220,0x2121,0x2221,0x2125};
     for(unsigned i=0;i<7;i++){unsigned phy=99;CHECK(atom_board_phy((uint16_t)ids[i],&phy) && phy==i);cases++;}
     unsigned bad[]={0,0x111e,0x201e,0x231e,0x2225,0x2155};
     for(unsigned i=0;i<6;i++){unsigned phy=99;CHECK(!atom_board_phy((uint16_t)bad[i],&phy) && phy==99);cases++;}
-    init(4,1,&rom);bytes[204+6]=0x01; /* Software GPIO I2C is decoded, not silently upgraded. */
+    init(4,1,&rom);bytes[204+4]=0x01; /* Software GPIO I2C is decoded, not silently upgraded. */
     bytes[records_at(1,0)+2]=0x01;CHECK(atom_board_open(&rom,&b)==ATOM_BOARD_OK && !b.paths[0].ddc_hardware);cases++;
 }
 static void malformed(void){
@@ -62,8 +62,8 @@ static void malformed(void){
           case 6:p16(p+2,8);break;case 7:p16(p+2,48);break;case 8:bytes[r+1]=1;break;
           case 9:bytes[r+1]=25;break;case 10:bytes[r+5]=3;break;case 11:bytes[r+7]=2;break;
           case 12:bytes[r+6]=99;break;case 13:bytes[r+6]=0x90;break;case 14:bytes[r+2]=0x99;break;
-          case 15:bytes[208]=32;break;case 16:bytes[209]=32;break;case 17:p32(204,0);break;
-          case 18:p32(204,0x40000000);break;case 19:bytes[210+8]=0x90;break;
+          case 15:bytes[206]=32;break;case 16:bytes[207]=32;break;case 17:p16(204,0);break;
+          case 18:bytes[207]=33;break;case 19:p16(200,4);break;
           case 20:p16(1614,0);break;case 21:bytes[1642]=0;break;case 22:bytes[1645]=9;break;
           case 23:p16(p,0x300c);break;case 24:p16(p+4,0x2125);break;
           case 25:bytes[r+11]=5;break;case 26:p16(400,8+16+16);break;

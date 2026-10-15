@@ -45,9 +45,9 @@ static void rom_init(model *m,unsigned link,unsigned ddc,unsigned hpd){
     p16(b+80,4);p16(b+100,64);b[102]=2;b[103]=1;p16(b+104+12*2,200);p16(b+104+22*2,400);p16(b+104+27*2,1600);p16(b+104+28*2,600);
     p16(b+600,108);b[602]=2;b[603]=5;b[620]=1;
     p32(b+624,8192);p32(b+628,255);p16(b+634,84);b[637]=0x70;b[638]=8;b[639]=4;
-    p16(b+200,20);b[202]=2;b[203]=1;
-    p32(b+204,dcn302_ddc_gpio_bytes[ddc]/4);b[208]=(uint8_t)bit(dcn302_ddc_clk_mask[ddc]);b[209]=1;b[210]=(uint8_t)(0x90+ddc);
-    p32(b+212,DCN302_GPIO_HPD_BYTES/4);b[216]=(uint8_t)bit(dcn302_hpd_mask[hpd]);b[217]=b[216];b[218]=5;
+    p16(b+200,16);b[202]=2;b[203]=1;
+    p16(b+204,dcn302_ddc_gpio_bytes[ddc]/4);b[206]=(uint8_t)bit(dcn302_ddc_clk_mask[ddc]);b[207]=1;b[208]=(uint8_t)(0x90+ddc); /* 6-byte gpio_pin_lut entries */
+    p16(b+210,DCN302_GPIO_HPD_BYTES/4);b[212]=(uint8_t)bit(dcn302_hpd_mask[hpd]);b[213]=b[212];b[214]=5;
     p16(b+400,48);b[402]=1;b[403]=4;b[406]=1;p16(b+408,0x310c);p16(b+410,24);
     unsigned encoders[]={0x211e,0x221e,0x2120,0x2220,0x2121};p16(b+412,encoders[link]);p16(b+416,34);p16(b+420,8);
     b[424]=1;b[425]=4;b[426]=(uint8_t)(0x90+ddc);b[428]=2;b[429]=4;b[430]=5;b[431]=1;b[432]=255;
@@ -230,7 +230,7 @@ static void init(model *m,nexis_gpu_services *k,unsigned link,unsigned stream,un
         m->dpp[i][DCN302_DPP_R_STATUS]=3;
         m->dpp[i][DCN302_DPP_R_LOCAL_CLOCK]=0x10;
     }
-    m->fb_base=0x9000;m->fb_top=0x91ff;m->fb_offset=0x8000;
+    m->fb_base=0x8000;m->fb_top=0x81ff;m->fb_offset=0x4000; /* RDNA2: MC address of VRAM starts at 0x8000000000, FB_OFFSET holds the aperture address */
 }
 static void normal(void){
     model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
@@ -269,11 +269,15 @@ static void failures(void){
             case 30:p16(m.rom+1612,2700);break;case 31:p16(m.rom+1612,12001);break;
         }
         if(fault>=24){unsigned sum=0;for(unsigned n=0;n<2047;n++)sum+=m.rom[n];m.rom[2047]=(uint8_t)(0-sum);}
+        if(fault==19 || fault==20){      /* SMU header / driver-interface numbers are only logged, never fatal (Linux ignores them) */
+            CHECK(rx6600_probe(&s,&k)==RX6600_OK && s.ready && (fault==19?s.smu.interface_mismatch:s.smu.header_mismatch));rx6600_shutdown(&s);cases++;continue;
+        }
         CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !s.busy && !m.writes);
         memset(&out,0xa5,sizeof(out));CHECK(!rx6600_read_mode(&s,&out) && !memcmp(&out,&zero,sizeof(out)));cases++;
     }
     for(unsigned op=1;op<=100;op++){
-        init(&m,&k,4,0,3,2,1,2,4,1,1);m.fail_read=op;CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !m.writes && !m.invalid);cases++;
+        init(&m,&k,4,0,3,2,1,2,4,1,1);m.fail_read=op;k.log=NULL; /* no log: the failure-time register dump would read registers the model does not know */
+        CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !m.writes && !m.invalid);cases++;
     }
     for(unsigned op=1;op<=4;op++){
         init(&m,&k,4,0,3,2,1,2,4,1,1);m.fail_query=op;CHECK(rx6600_probe(&s,&k)!=RX6600_OK && !s.ready && !m.writes);cases++;
@@ -284,7 +288,7 @@ static void failures(void){
             case 0:m.vram.bytes/=2;break;case 1:m.registers.base+=4096;break;case 2:m.hpd[1]=0;break;
             case 3:m.dig[4][DCN302_HDMI_R_BE]=0;break;case 4:m.surface[1][DCN302_SURFACE_R_INUSE]++;break;
             case 5:m.otg[3][DCN302_R_H_TOTAL]++;break;
-            case 6:m.period*=2;m.time+=500000;break;case 7:m.time+=31000000;break;case 8:m.time=0;break;
+            case 6:m.period*=2;m.time+=500000;break;case 7:m.period*=3;m.time+=700000;break;case 8:m.time=0;break;
             case 9:m.fail_read=m.reads+1;break;
             case 10:m.otg[3][DCN302_R_V_CONTROL]|=DCN302_V_MIN_SELECT_MASK;break;
             case 11:m.otg[3][DCN302_R_V_MIN]++;break;case 12:m.otg[3][DCN302_R_V_MAX]++;break;
@@ -297,7 +301,10 @@ static void failures(void){
     }
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);s.busy=true;
     CHECK(!rx6600_read_mode(&s,&out) && s.ready);rx6600_poll(&s);CHECK(s.ready);cases++;
-    init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);m.hpd[1]=0;rx6600_poll(&s);CHECK(!s.ready);cases++;
+    /* A short HPD pulse (input switch, HDMI re-authentication) is tolerated; a pin that stays low for 3 s is not. */
+    init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);const uint32_t hpd_high=m.hpd[1];
+    m.hpd[1]=0;rx6600_poll(&s);CHECK(s.ready && s.hpd_lost_us);m.hpd[1]=hpd_high;rx6600_poll(&s);CHECK(s.ready && !s.hpd_lost_us);
+    m.hpd[1]=0;rx6600_poll(&s);CHECK(s.ready);m.time+=4000000;rx6600_poll(&s);CHECK(!s.ready);cases++;
 }
 typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
 static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address,uintptr_t bandwidth_address,uintptr_t hubp_address,uintptr_t timing_address,uintptr_t dpp_address){

@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 /* Read-only views of the board's own firmware. No x86 option-ROM execution. */
-typedef struct { const uint8_t *image;size_t size;uint16_t commands,data; } atom_rom;
+typedef struct { const uint8_t *image;size_t size;uint16_t commands,data;bool checksum_ok; } atom_rom; /* checksum_ok: informational (Linux does not verify the image checksum) */
 typedef struct { const uint8_t *bytes;uint16_t size;uint8_t format,revision,workspace,parameters; } atom_table;
 bool atom_rom_open(const uint8_t *,size_t,uint16_t vendor,uint16_t device,atom_rom *);
 bool atom_rom_table(const atom_rom *,bool command,unsigned index,atom_table *);

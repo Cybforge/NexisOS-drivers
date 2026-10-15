@@ -72,8 +72,14 @@ static void rejected(void){
             case 20:m.hpd[1]=0;break;case 21:m.otg[1][DCN302_R_CONTROL]=DCN302_MASTER_ACTIVE_MASK|DCN302_MASTER_ENABLE_MASK;break;
             case 22:b.paths[1]=b.paths[0];b.count=2;break;case 23:m.otg[3][DCN302_R_FORMAT]=DCN302_DSC_MASK;break;
         }
+        if(kind==19){   /* live SENSE high while the debounced copy is still low (HPD block not enabled by the video BIOS): connected */
+            CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK);cases++;continue;
+        }
         memset(&r,0xa5,sizeof(r));CHECK(dcn302_route_find(&io,&b,1920,1080,&r)!=DCN302_ROUTE_OK && !memcmp(&r,&zero,sizeof(r)) && !m.invalid);cases++;
     }
+    init(&m,&io,&b,4,0,3,2,1);m.dig[4][DCN302_HDMI_R_BE]=HS(m.dig[4][DCN302_HDMI_R_BE],HPD,6);   /* firmware left another DIG_HPD_SELECT: the board's pin is used */
+    CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK && r.hpd==1);cases++;
+    init(&m,&io,&b,4,0,3,2,1);m.hpd[1]=DCN302_HPD_DELAYED_MASK;CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_ABSENT);cases++;
     init(&m,&io,&b,4,0,3,2,1);CHECK(dcn302_route_find(&io,&b,1280,1080,&r)==DCN302_ROUTE_UNSUPPORTED);cases++;
     init(&m,&io,&b,4,0,3,2,1);CHECK(dcn302_route_find(&io,&b,1920,1080,&r)==DCN302_ROUTE_OK);unsigned ops=m.ops;
     for(unsigned fail=1;fail<=ops;fail++){

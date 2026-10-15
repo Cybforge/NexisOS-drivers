@@ -150,6 +150,7 @@ static void trial_finish(bool keep) {
     bool ok = gpu_runtime_revert();
     marker_clear(); /* a clean, user-visible revert is not a crash */
     P.loaded = false;
+    P.declined = true; /* rejected by the user or by the timeout: a late (update-check) download must not start a second countdown */
     kprintf("[GPU] Anzeigemodus auf Firmware-Ausgabe zurückgesetzt (%s)\n", tr(ok ? "ok" : "Wiederherstellung fehlgeschlagen"));
     notify_post("Grafiktreiber", ok ? "Zurückgesetzt" : "Zurücksetzen fehlgeschlagen",
                 ok ? "Firmware-Anzeige wieder aktiv." : "Bitte neu starten (Option nogpudriver).", ok ? NOTIFY_WARNING : NOTIFY_ERROR);

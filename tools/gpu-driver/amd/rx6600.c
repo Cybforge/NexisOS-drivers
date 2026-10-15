@@ -355,7 +355,42 @@ static bool NEXIS_GPU_CALL bandwidth_registers(void *context,const nexis_gpu_tim
     else s->error=e?RX6600_BANDWIDTH:RX6600_OK;
     s->busy=false;return !e;
 }
-enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
+/* Failure-time register dump for the first runs on real hardware: one dmesg capture then shows the state the VBIOS/GOP left
+ * (frame buffer location, display pipes, SMU mailbox, clocks) and tells what the probe assumed wrongly. Read-only. */
+static bool dump_read(rx6600_state *s,uint32_t offset,uint32_t *value){
+    return s->io.read && s->io.read(s->io.context,offset,value);
+}
+static void dump_one(rx6600_state *s,const char *name,uint32_t offset){
+    uint32_t v;
+    if(dump_read(s,offset,&v))nx_logf("rx6600: reg %s @%x = %08x",name,offset,v);
+    else nx_logf("rx6600: reg %s @%x unreadable",name,offset);
+}
+static void dump_registers(rx6600_state *s){
+    nx_logf("rx6600: --- register dump after the failed probe ---");
+    dump_one(s,"FB_BASE",DCN302_FB_BASE_BYTES);dump_one(s,"FB_TOP",DCN302_FB_TOP_BYTES);dump_one(s,"FB_OFFSET",DCN302_FB_OFFSET_BYTES);
+    dump_one(s,"SMU_ARGUMENT",DCN302_SMU_ARGUMENT_BYTES);dump_one(s,"SMU_RESPONSE",DCN302_SMU_RESPONSE_BYTES);
+    dump_one(s,"DFS_PLL",DCN302_DFS_PLL_BYTES);dump_one(s,"DFS_DENTIST",DCN302_DFS_DENTIST_BYTES);dump_one(s,"DFS_DTO_CTRL",DCN302_DFS_DTO_CTRL_BYTES);
+    dump_one(s,"HUBBUB_REFCLK_CNTL",DCN302_HUBBUB_REF_BYTES);dump_one(s,"HUBBUB_GLOBAL_TIMER",DCN302_HUBBUB_TIMER_BYTES);
+    for(unsigned p=0;p<5;p++){
+        uint32_t be=0,en=0,fe=0,hpd=0;bool ok=true;
+        if(!dump_read(s,dcn302_hdmi_register_bytes[p][DCN302_HDMI_R_BE],&be))ok=false;
+        if(!dump_read(s,dcn302_hdmi_register_bytes[p][DCN302_HDMI_R_BE_ENABLE],&en))ok=false;
+        if(!dump_read(s,dcn302_hdmi_register_bytes[p][DCN302_HDMI_R_FE],&fe))ok=false;
+        if(!dump_read(s,dcn302_hpd_status_bytes[p],&hpd))ok=false;
+        nx_logf("rx6600: link/stream %u%s: DIG BE %08x BE-enable %08x FE %08x | HPD %u status %08x",p,ok?"":" (some reads failed)",be,en,fe,p,hpd);
+    }
+    for(unsigned p=0;p<5;p++){
+        uint32_t o[4]={0},h[8]={0};bool ok=true;
+        const uint32_t ot[4]={dcn302_register_bytes[p][DCN302_R_CONTROL],dcn302_register_bytes[p][DCN302_R_H_TOTAL],dcn302_register_bytes[p][DCN302_R_V_TOTAL],dcn302_register_bytes[p][DCN302_R_V_CONTROL]};
+        const enum dcn302_surface_register hr[8]={DCN302_SURFACE_R_CONFIG,DCN302_SURFACE_R_CLOCK,DCN302_SURFACE_R_HUBP,DCN302_SURFACE_R_ADDRESS,DCN302_SURFACE_R_ADDRESS_HIGH,DCN302_SURFACE_R_INUSE,DCN302_SURFACE_R_INUSE_HIGH,DCN302_SURFACE_R_PITCH};
+        for(unsigned i=0;i<4;i++)if(!dump_read(s,ot[i],&o[i]))ok=false;
+        for(unsigned i=0;i<8;i++)if(!dump_read(s,dcn302_surface_register_bytes[p][hr[i]],&h[i]))ok=false;
+        nx_logf("rx6600: pipe %u%s: OTG ctl %08x htotal %08x vtotal %08x vctl %08x | HUBP cfg %08x clk %08x cntl %08x addr %08x:%08x inuse %08x:%08x pitch %08x",
+                p,ok?"":" (some reads failed)",o[0],o[1],o[2],o[3],h[0],h[1],h[2],h[4],h[3],h[6],h[5],h[7]);
+    }
+}
+
+static enum rx6600_error probe_inner(rx6600_state *s,const nexis_gpu_services *k){
     if(!s)return RX6600_INPUT;
     memset(s,0,sizeof(*s));
     if(!k || k->abi!=2 || k->size!=NEXIS_GPU_SERVICES_LOG_BYTES || k->vendor!=0x1002 || (k->device!=0x73ff && k->device!=0x73ef) ||
@@ -387,6 +422,7 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     atom_rom rom;
     if(!atom_rom_open(k->rom,k->rom_bytes,k->vendor,k->device,&rom)){nx_logf("rx6600: probe stopped at: video BIOS image (%u bytes) not usable",(unsigned)k->rom_bytes);return fail(s,RX6600_ROM);}
     s->firmware_rom=rom;
+    if(!rom.checksum_ok)nx_logf("rx6600: note: the video BIOS image checksum is not zero (tables are still used)");
     unsigned detail=atom_board_open(&rom,&s->board);
     if(detail!=ATOM_BOARD_OK){nx_logf("rx6600: probe stopped at: board data of the video BIOS (code %u)",detail);return fail(s,RX6600_BOARD);}
     detail=atom_memory_open(&rom,&s->memory);
@@ -402,11 +438,22 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
     detail=dcn302_clock_measure(&s->io,s->route.otg,now,16,&s->clock);
     if(detail!=DCN302_OK || s->clock.pixel_khz>s->route.max_tmds_khz){nx_logf("rx6600: probe stopped at: measuring the running pixel clock (code %u, %u kHz, limit %u kHz)",detail,s->clock.pixel_khz,s->route.max_tmds_khz);return fail(s,RX6600_CLOCK);}
     if(dcn302_dfs_read(&s->io,&s->dfs)){nx_logf("rx6600: probe stopped at: display clock (DFS) readback");return fail(s,RX6600_CLOCK);}
-    if(!dcn302_smu_open(&s->smu,&s->io,now)){nx_logf("rx6600: probe stopped at: power-management (SMU) mailbox did not answer");return fail(s,RX6600_SMU);}
+    if(!dcn302_smu_open(&s->smu,&s->io,now)){
+        nx_logf("rx6600: probe stopped at: power-management (SMU) mailbox (error %u, test reply 0x%x, version 0x%x, last response 0x%x)",
+            (unsigned)s->smu.error,s->smu.raw_test,s->smu.version,s->smu.raw_response);
+        return fail(s,RX6600_SMU);
+    }
+    if(s->smu.header_mismatch || s->smu.interface_mismatch)
+        nx_logf("rx6600: note: SMU header version %u (expected 1), driver interface 0x%x (expected 0x%x); continuing like Linux",
+            s->smu.raw_header,s->smu.raw_interface,(unsigned)DCN302_SMU_INTERFACE);
     const enum dcn302_smu_clock clocks[]={DCN302_SMU_SOCCLK,DCN302_SMU_UCLK,DCN302_SMU_DCEFCLK,DCN302_SMU_DISPCLK,DCN302_SMU_DPPCLK,DCN302_SMU_PHYCLK};
     for(unsigned n=0;n<6;n++){
         dcn302_smu_limits limits;
-        if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits)){nx_logf("rx6600: probe stopped at: SMU clock limits for clock %u",n);return fail(s,RX6600_SMU);}
+        if(!dcn302_smu_clock_limits(&s->smu,clocks[n],&limits)){
+            nx_logf("rx6600: probe stopped at: SMU clock limits for clock %u (SMU clock id %u, error %u, response 0x%x, value 0x%x)",
+                n,(unsigned)clocks[n],(unsigned)s->smu.error,s->smu.raw_response,s->smu.raw_value);
+            return fail(s,RX6600_SMU);
+        }
     }
     enum rx6600_error error=prove(s);
     if(error){nx_logf("rx6600: probe stopped at: final consistency check (code %u)",(unsigned)error);return fail(s,error);}
@@ -418,9 +465,15 @@ enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
         s->route.path,s->route.otg,s->route.link,s->route.stream,s->route.ddc,s->route.max_tmds_khz);
     s->ready=true;s->error=RX6600_OK;return RX6600_OK;
 }
+enum rx6600_error rx6600_probe(rx6600_state *s,const nexis_gpu_services *k){
+    enum rx6600_error e=probe_inner(s,k);
+    if(e!=RX6600_OK && e!=RX6600_INPUT && s && s->services && nx_log_enabled())dump_registers(s);
+    return e;
+}
 static bool alive(rx6600_state *s){
     uint64_t time=now(s);uint32_t frame;
-    if(time<s->sampled_us || time-s->sampled_us>30000000 || !dcn302_otg_frame_count(&s->io,s->route.otg,&frame))return false;
+    if(time<s->sampled_us || !dcn302_otg_frame_count(&s->io,s->route.otg,&frame))return false;
+    if(time-s->sampled_us>30000000){s->sampled_us=time;s->sampled_frame=frame;return true;} /* no poll for a long while: start a fresh window instead of failing */
     uint64_t elapsed=time-s->sampled_us;
     if(elapsed<100000)return true;
     uint64_t expected=(elapsed*s->clock.refresh_millihz+500000000)/1000000000;
@@ -489,8 +542,16 @@ bool rx6600_refresh_after_modeset(rx6600_state *s,const nexis_gpu_timing *measur
 void rx6600_poll(rx6600_state *s){
     if(!s || !s->ready || s->busy || s->in_modeset)return;
     bool connected=false;s->busy=true;
-    if(dcn302_route_connected(&s->io,&s->board.paths[s->route.path],s->route.hpd,&connected)!=DCN302_ROUTE_OK || !connected)
-        fail(s,RX6600_ROUTE);
+    const enum dcn302_route_error hpd=dcn302_route_connected(&s->io,&s->board.paths[s->route.path],s->route.hpd,&connected);
+    /* Monitors pulse HPD when the input is switched, after a mode change and during HDMI re-authentication: only a pin
+     * that stays low for 3 s means the monitor is really gone. */
+    const uint64_t t=now(s);
+    if(hpd==DCN302_ROUTE_OK && connected)s->hpd_lost_us=0;
+    else if(hpd==DCN302_ROUTE_OK){
+        if(!s->hpd_lost_us)s->hpd_lost_us=t?t:1;
+        if(t<s->hpd_lost_us || t-s->hpd_lost_us>3000000)fail(s,RX6600_ROUTE);
+    }else fail(s,RX6600_ROUTE);
+    if(!s->ready){}
     else if(!s->smu.ready || s->smu.poisoned)fail(s,RX6600_SMU);
     else if(!fixed_rate(s) || !alive(s))fail(s,RX6600_CLOCK);
     s->busy=false;

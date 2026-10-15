@@ -12,15 +12,17 @@ bool atom_board_phy(uint16_t encoder,unsigned *phy){
     if(number<1 || number>2 || (base==6 && number!=1))return false;
     *phy=base+number-1;return true;
 }
+/* gpio_pin_lut (Linux atomfirmware.h / bios_parser2.c): 4-byte header, then 6-byte entries
+ * { u16 data_a_reg_index (dword register index); u8 gpio_bitshift; u8 gpio_mask_bitshift; u8 gpio_id; u8 reserved }.
+ * Linux takes the FIRST entry with a matching gpio_id, so does this. */
+#define GPIO_ENTRY_BYTES 6u
 static enum atom_board_error gpio(const atom_table *table,uint8_t id,atom_board_gpio *out){
-    unsigned found=0;atom_board_gpio item={0};
-    for(unsigned off=4;off<table->size;off+=8){
-        const uint8_t *p=table->bytes+off;if(p[6]!=id)continue;
-        if(++found>1)return ATOM_BOARD_AMBIGUOUS;
-        item.index=u32(p);item.shift=p[4];item.mask_shift=p[5];item.id=id;
-        if(!item.index || item.index>UINT32_MAX/4 || item.shift>=32 || item.mask_shift>=32)return ATOM_BOARD_TABLE;
+    atom_board_gpio item={0};bool found=false;
+    for(unsigned off=4;off+GPIO_ENTRY_BYTES<=table->size;off+=GPIO_ENTRY_BYTES){
+        const uint8_t *p=table->bytes+off;if(p[4]!=id)continue;
+        item.index=u16(p);item.shift=p[2];item.mask_shift=p[3];item.id=id;found=true;break;
     }
-    if(!found)return ATOM_BOARD_TABLE;
+    if(!found || !item.index || item.shift>=32 || item.mask_shift>=32)return ATOM_BOARD_TABLE;
     *out=item;return ATOM_BOARD_OK;
 }
 static enum atom_board_error records(const atom_table *table,unsigned start,unsigned minimum,
@@ -67,13 +69,13 @@ enum atom_board_error atom_board_open(const atom_rom *rom,atom_board *out){
        !atom_rom_table(rom,false,27,&dce))return ATOM_BOARD_TABLE;
     if(objects.format!=1 || (objects.revision!=4 && objects.revision!=5) ||
        pins.format!=2 || pins.revision!=1 || dce.format!=4 || dce.revision<1 || dce.revision>5)return ATOM_BOARD_VERSION;
-    if(objects.size<8 || pins.size<12 || (pins.size-4)%8 || dce.size<48)return ATOM_BOARD_TABLE;
+    if(objects.size<8 || pins.size<10 || (pins.size-4)%6 || dce.size<48)return ATOM_BOARD_TABLE;
     unsigned count=objects.bytes[6],minimum=8+count*16;
     if(!count || count>ATOM_BOARD_MAX_PATHS || minimum>objects.size)return ATOM_BOARD_TABLE;
     atom_board b={0};const uint8_t *c=dce.bytes;
     b.reference_khz=u16(c+12)*10;b.i2c_reference_khz=u16(c+14)*10;
     b.phy_reference_khz=u16(c+36)*10;b.boot_display_khz=u32(c+8)*10;
-    if(u32(c+8)>UINT32_MAX/10 || !b.reference_khz || !b.i2c_reference_khz || !b.phy_reference_khz ||
+    if(u32(c+8)>UINT32_MAX/10 || !b.reference_khz || !b.i2c_reference_khz ||   /* phy_reference_khz may legitimately be 0 (unknown) */
        b.reference_khz>100000 || b.i2c_reference_khz>100000 || b.phy_reference_khz>100000)return ATOM_BOARD_TABLE;
     b.pipes=c[42];b.plls=c[44];b.phys=c[45];b.aux=c[46];b.devices=(uint16_t)u16(objects.bytes+4);
     if(!b.pipes || b.pipes>8 || !b.phys || b.phys>8 || !b.plls || b.plls>8 || b.aux>8)return ATOM_BOARD_TABLE;
