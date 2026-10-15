@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v8 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v13 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,34 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Zwölfter Hardwarelauf (2026-10-15) und Paket v13: warum weder HDMI-Audio noch mehr Hertz herauskamen
+
+Der Lauf mit v12 (Fotos vom Nutzer) zeigt: Sonde, Modul, EDID über DDC und die Einstellungsseite funktionieren; die Umschalt-Sequenz
+bricht aber im **Plan** ab, weil der Vorab-Check meldet „SetPixelClock MISSING v0.0 (0 bytes), UNIPHY transmitter MISSING“. Ohne diese
+beiden Video-BIOS-Befehlstabellen läuft weder die Takt-/Senderumschaltung noch die Audio-Einrichtung (alles bleibt unverändert, 60 Hz,
+„HDMI-Audio: nicht aktiv“). Zusätzlich steht im selben Log: „the video BIOS image checksum is not zero“.
+
+* **Wahrscheinlichste Ursache (nicht auf der Karte bestätigt):** `atom_rom_open` begrenzte alle Tabellenzugriffe auf die im PCIR-Kopf
+  angegebene Abbildlänge; Linux (`atom.c`) begrenzt nur den Puffer und prüft den Befehlsindex nicht gegen die Listenlänge. Eine
+  Prüfsumme ungleich null passt zu einer falschen Längenangabe. v13 prüft jetzt gegen das ganze gehaltene ROM (`atom_rom.size` = Rest ab
+  dem ATOM-Abbild) und liest Befehlseinträge hinter dem Listenende wie Linux, akzeptiert sie aber nur bei plausiblem Tabellenkopf
+  (Format 1–4, Revision 1–15, Größe ≤ 32 KiB). Datentabellen bleiben streng. Neue Host-Tests dafür in `test_atom_tables.c`.
+* **Diagnose für den nächsten Lauf** (nur Log, kein Hardwarezugriff): beim Start „video BIOS command list: entry 12 … entry 76 …“; fehlen
+  die Tabellen trotzdem, dann „video BIOS: … command list 0x… (N entries, M set)“, die Einträge 0/4/12/13/42/46/50/76, ein Hexdump der
+  Befehlsliste und eine Suche im ganzen ROM nach Tabellenköpfen von SetPixelClock/Transmitter/Encoder mit Angabe, unter welcher
+  Listennummer sie stehen („NOT in the command list“ = Tabelle existiert, wird aber nicht gelistet). Lehnt der Interpreter eine Tabelle ab,
+  nennt das Log jetzt Tabelle, Byte-Offset und Opcode (`atom_vm.fault_*`).
+* **Bild 240 Hz bleibt aus zwei weiteren Gründen unerreichbar (ehrlich):** (1) Der Kernel hat kein Firmware-EDID („Monitor-EDID fehlt,
+  0 Zielmodi“), wählt also gar keinen Zielmodus; das vom Modul per DDC gelesene EDID erreicht die Modusauswahl nicht. (2) Der SMU/PMFW
+  antwortet nicht (Mailbox-Register verhalten sich wie Speicher); bei Navi lädt der Linux-Treiber die SMU-Firmware selbst über die PSP,
+  UEFI/GOP startet sie offenbar nicht. Ohne SMU bleibt DISPCLK/DPPCLK bei 165,9 MHz (Pixeltakt-Grenze 158 MHz), 240 Hz bräuchte ~550 MHz.
+* **Shell:** `dmesg [-n zeilen] [muster …]` filtert selbst (Pipes gibt es in `nsh` nicht): `dmesg rx6600 gpu hda -n 80`.
+* **Fenster schnell bewegen:** Reproduktion im Emulator (`scripts/test_window_drag.py`, 300 zufällige ruckartige Bewegungen gegen ein ruhiges
+  Ziehen an dieselbe Stelle): das Endbild ist identisch, es bleiben keine Reste zurück. Mitten in der Bewegung zeigt ein Screenshot
+  Zerreißen (Teile des Fensters an alter und neuer Position), weil direkt in den sichtbaren Bildspeicher gezeichnet wird, ohne auf die
+  Bildwiederholung zu warten. Das Foto des Nutzers zeigt dasselbe Muster. Behebung bräuchte eine vblank-synchrone Ausgabe
+  (OTG-Bildzähler vom Treiber, ABI-Erweiterung) – nicht umgesetzt, nicht überprüfbar ohne die Karte.
 
 ## Offline-Audit (2026-10-15) und Paket v12: die Umschalt-Sequenz gegen das gelesen, was die echte Karte tatsächlich zeigt
 
