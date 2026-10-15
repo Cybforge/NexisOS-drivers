@@ -627,8 +627,75 @@ static void selftest_lock(void){
     if(s.ready){CHECK(!rx6600_set_mode(&s,&t144) && m.writes==writes && m.fw_ops==fw);}
     cases++;
 }
+/* ---- scenario: the real card's video BIOS has no SetPixelClock / transmitter command (Navi23 runs them in the DMCUB firmware):
+ * the unchanged mode still gets HDMI audio through the audio-only sequence, a mode change is refused, nothing runs through ATOM ---- */
+static bool NEXIS_GPU_CALL check_missing(void *context){(void)context;return false;}
+static void real_setup(model *m,nexis_gpu_services *k,rx6600_state *s,nexis_gpu_scanout *out){
+    init(m,k,0,0,0,1,2,0,0,0,1);m->smu_dead=true;
+    m->vram=(nexis_gpu_resource){0x7fe0000000ULL,0x10000000ULL,7,0};m->registers=(nexis_gpu_resource){0xfca00000,0x100000,9,0};
+    k->framebuffer=0x7fe0000000ULL;k->pitch=1920;k->framebuffer_bytes=1920u*4*1080;m->fb_offset=0;
+    m->smu_argument=0;m->smu_response=0;m->dfs_pll=0x10000001;m->dfs_dentist=0x4c194c4c;m->dfs_control=0;m->reference=0;m->timer=0x1002;
+    m->pixel_khz=m->pll_khz=148500;m->scdc[0x20]=0;
+    for(unsigned i=0;i<5;i++){
+        m->dig[i][DCN302_HDMI_R_BE]=i?0x00010000u:0x20020100u;m->dig[i][DCN302_HDMI_R_BE_ENABLE]=i?0x100u:0x101u;
+        m->dig[i][DCN302_HDMI_R_FE]=i?0:0x01000000u;m->hpd[i]=i==2?0x12u:0;
+        if(i)m->otg[i][DCN302_R_CONTROL]=0x300;
+    }
+    m->dig[0][DCN302_HDMI_R_CONTROL]=0;
+    uint32_t *o=m->otg[0];o[DCN302_R_CONTROL]=0x00010301;o[DCN302_R_CLOCK]|=DCN302_BUSY_MASK;
+    o[DCN302_R_H_TOTAL]=0x897;o[DCN302_R_H_BLANK]=2112|(192u<<16);o[DCN302_R_H_SYNC]=44u<<16;
+    o[DCN302_R_V_TOTAL]=0x464;o[DCN302_R_V_BLANK]=1121|(41u<<16);o[DCN302_R_V_SYNC]=5u<<16;
+    uint32_t *h=m->surface[0];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_CLOCK]=0x00f11111;h[DCN302_SURFACE_R_HUBP]=0x000f0002;
+    h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0;h[DCN302_SURFACE_R_ADDRESS_HIGH]=h[DCN302_SURFACE_R_INUSE_HIGH]=0x80;h[DCN302_SURFACE_R_PITCH]=0x780;
+    CHECK(rx6600_probe(s,k)==RX6600_OK);doubles(s);s->firmware_check=check_missing;
+    CHECK(rx6600_read_mode(s,out) && out->timing.htotal==2200 && out->timing.vtotal==1125);
+}
+static void audio_only(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    real_setup(&m,&k,&s,&out);
+    nexis_gpu_timing running_now=out.timing;
+    nexis_gpu_timing t240={.hactive=1920,.hsync_start=1968,.hsync_end=2000,.htotal=2080,.vactive=1080,.vsync_start=1083,.vsync_end=1088,.vtotal=1118,.flags=out.timing.flags,.pixel_khz=558195};
+    unsigned fw0=m.fw_ops;
+    CHECK(!s.audio_active && !s.audio_tried);
+    CHECK(rx6600_set_mode(&s,&running_now) && s.ready && s.audio_tried && s.audio_active && running0(&m) && ppm_close(m.pixel_khz,148500) && !m.invalid);
+    CHECK(m.fw_ops==fw0);   /* nothing went through the video BIOS commands */
+    CHECK(m.dfs_dentist==0x4c194c4c && s.tables_checked && !s.tables_ok);
+    CHECK(((m.dig[0][DCN302_HDMI_R_BE]&DCN302_HDMI_LINK_MODE_MASK)>>DCN302_HDMI_LINK_MODE_SHIFT)==3);                 /* DVI -> HDMI */
+    CHECK((m.dig[0][DCN302_HDMI_R_BE_ENABLE]&DCN302_HDMI_LINK_ENABLE_MASK) && (m.dig[0][DCN302_HDMI_R_BE_ENABLE]&DCN302_HDMI_LINK_CLOCK_MASK));  /* link back on */
+    CHECK(m.dig[0][DCN302_HDMI_R_AUDIO_CLOCK]&DCN302_HDMI_CLOCK_ENABLE_MASK);
+    CHECK(m.dig[0][DCN302_HDMI_R_AFMT_PACKET]&DCN302_HDMI_SAMPLE_SEND_MASK);
+    CHECK(m.az[0][dcn302_az_ix[DCN302_AZ_R_HOT_PLUG]]&DCN302_AZ_HOT_PLUG_AUDIO_ENABLED_MASK);
+    CHECK(!(m.surface[0][DCN302_SURFACE_R_HUBP]&1));   /* plane visible again */
+    CHECK(rx6600_read_mode(&s,&out) && (out.flags&NEXIS_GPU_SCANOUT_AUDIO) && nexis_gpu_mode_readback_matches(&out,&running_now));
+    unsigned writes=m.writes;
+    CHECK(rx6600_set_mode(&s,&running_now) && m.writes==writes);                       /* nothing is redone */
+    CHECK(!rx6600_set_mode(&s,&t240) && s.ready && running0(&m) && m.writes==writes);  /* a mode change is refused without touching a register */
+    cases++;
+    /* every register write of the sequence failing (rejected, posted-then-error, ignored): the picture is back or the output is cleanly off */
+    real_setup(&m,&k,&s,&out);
+    unsigned w0=m.writes;CHECK(rx6600_set_mode(&s,&running_now));
+    unsigned total=m.writes-w0;CHECK(total>20);
+    for(unsigned kind=0;kind<3;kind++)for(unsigned n=1;n<=total;n++){
+        real_setup(&m,&k,&s,&out);
+        snap before;take(&m,&before);
+        if(kind==2)m.ignore_mmio_write=m.writes+n;else{m.fail_mmio_write=m.writes+n;m.posted=kind==1;}
+        bool ok=rx6600_set_mode(&s,&running_now);
+        if(ok){CHECK(s.ready && running0(&m) && !m.invalid);cases++;if(s.audio_active)harmless++;else video_only++;continue;}
+        CHECK(!m.invalid && !s.in_modeset);
+        if(s.ready){
+            /* NO_OUTSTANDING_REQ (bit 1 of DCHUBP_CNTL) is pipeline status, not configuration: the real card's dump has it set while the pipe runs */
+            for(unsigned i=0;i<5;i++){
+                before.surface[i][DCN302_SURFACE_R_HUBP]=(before.surface[i][DCN302_SURFACE_R_HUBP]&~2u)|(m.surface[i][DCN302_SURFACE_R_HUBP]&2u);
+                before.hubp[i][DCN302_HUBP_R_DCHUBP_CNTL]=m.hubp[i][DCN302_HUBP_R_DCHUBP_CNTL];   /* same register as the surface copy compared above */
+            }
+            if(!same(&m,&before))explain(&m,&before);
+            CHECK(same(&m,&before) && running0(&m) && !s.audio_active);restored++;
+        }else{CHECK(all_stopped(&m));switched_off++;}
+        cases++;
+    }
+}
 int main(void){
-    edid_over_ddc_case();selftest_lock();real_card(false);real_card(true);switches();no_scdc();inject(true);inject(false);
+    edid_over_ddc_case();selftest_lock();real_card(false);real_card(true);audio_only();switches();no_scdc();inject(true);inject(false);
     printf("{\"passed\":true,\"cases\":%u,\"failures_restored_with_picture\":%u,\"failures_ended_with_output_off\":%u,\"faulted_switches_that_still_completed_with_audio\":%u,\"switches_completed_video_only_after_audio_fault\":%u,\"modeled_only\":true,\"physical_hardware_verified\":false}\n",cases,restored,switched_off,harmless,video_only);
     return 0;
 }

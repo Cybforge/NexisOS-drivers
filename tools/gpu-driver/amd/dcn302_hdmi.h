@@ -22,4 +22,8 @@ enum dcn302_hdmi_error dcn302_hdmi_prepare(const dcn302_io *,unsigned instance,u
 enum dcn302_hdmi_error dcn302_hdmi_commit(const dcn302_io *,dcn302_hdmi_transaction *);
 /* Disable transmitter first; rollback restores original packet configuration. */
 enum dcn302_hdmi_error dcn302_hdmi_restore(const dcn302_io *,dcn302_hdmi_transaction *);
+/* Back-end enable bit only (see dcn302_hdmi.c): lets the parent make the link quiet for dcn302_hdmi_prepare() without the VBIOS
+ * transmitter command. saved receives the register as it was; restore writes the enable bit back to that state. */
+enum dcn302_hdmi_error dcn302_hdmi_link_disable(const dcn302_io *,unsigned link,uint32_t *saved);
+enum dcn302_hdmi_error dcn302_hdmi_link_restore(const dcn302_io *,unsigned link,uint32_t saved);
 #endif

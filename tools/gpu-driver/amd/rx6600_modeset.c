@@ -61,6 +61,9 @@ typedef struct {
     bool tx_disabled;                 /* old transmitter was disabled: failure must re-enable it */
     bool scdc_changed;
     bool audio_was_on;                /* the previous mode played audio; a failed switch puts it back */
+    bool link_is_off;                 /* audio-only path: the DIG back-end enable bit is cleared right now */
+    bool hubp_blanked;                /* audio-only path: the plane was blanked before the OTG stopped */
+    uint32_t be_enable;               /* audio-only path: DIG_BE_EN_CNTL as it was */
     dcn302_clock_measurement measured;
 } ms;
 
@@ -425,8 +428,13 @@ static bool step_settle(void *c) {
 static bool relight(void *c) {
     ms *m = c;
     rx6600_state *s = m->s;
-    if (!m->stopped) return true; /* display was never touched */
+    if (!m->stopped && !m->hubp_blanked) return true; /* display was never touched */
     bool ok = true;
+    if (m->link_is_off) { /* audio-only path: give the back end its enable bit back before anything runs again */
+        enum dcn302_hdmi_error le = dcn302_hdmi_link_restore(&s->io, s->route.link, m->be_enable);
+        if (le) { nx_logf("rx6600: relight: DIG back end could not be enabled again (%u)", (unsigned)le); return false; }
+        m->link_is_off = false;
+    }
     /* The stop itself may have failed without effect (or an ignored write): the old picture is then still running. */
     {
         nexis_gpu_timing shape;
@@ -436,6 +444,7 @@ static bool relight(void *c) {
             if (rx6600_still_valid(s) && dcn302_clock_measure(&s->io, s->route.otg, ms_now, 16, &running_now) == DCN302_OK) {
                 nx_logf("rx6600: relight: the previous mode never stopped (%u kHz)", running_now.pixel_khz);
                 s->clock = running_now;
+                if (m->hubp_blanked && dcn302_hubp_unblank(&s->io, s->surface.hubp) != DCN302_HUBP_OK) { nx_logf("rx6600: relight: plane could not be made visible again"); return false; }
                 if (m->audio_was_on) { /* the audio endpoint was switched off at the start of the attempt */
                     if (dcn302_audio_enable_endpoint(&s->io, s->route.stream)) nx_logf("rx6600: relight: previous audio endpoint could not be switched on again");
                     else s->audio_active = true;
@@ -545,6 +554,133 @@ static bool modeset_once(rx6600_state *s, const nexis_gpu_timing *target) {
     return false;
 }
 
+/* ------------------------------------------------------------------ audio only at the running mode
+ *
+ * Navi23 (DCN 3.0.2): Linux sets dmub_command_table, i.e. SetPixelClock / DIG transmitter / encoder control are executed by the display
+ * microcontroller firmware and the video BIOS of this board does not list them at all (only 7 of 81 commands: seen in the log of
+ * package v13). The ATOM based sequence above can therefore never run here. What HDMI audio at the mode that already runs needs is
+ * only: back end DVI -> HDMI, AFMT packets/ACR, the audio endpoint, and a short picture break while the DIG back end is switched.
+ * The PHY and the pixel clock are not touched.
+ *
+ *   plan-audio  endpoint descriptors prepared from the monitor EDID (read only)
+ *   blank       plane blanked (Linux hubp set_blank before the OTG is disabled)
+ *   stop        OTG off
+ *   be_off      DIG back-end enable bit cleared      (undo: bit back)
+ *   hdmi        AFMT/stream attributes, DVI -> HDMI  (undo: restore)
+ *   audio       endpoint descriptors + wall clock    (undo: restore)
+ *   be_on       DIG back-end enable bit set          (undo: bit cleared again)
+ *   otg         OTG + VTG on                         (undo: OTG off)
+ *   verify      frame counter measurement + hot plug
+ *   commit      plane visible, AVMUTE off, samples + endpoint on
+ *   settle      routing/surface proof, drop the images
+ */
+static bool audio_only_guard(void *context) { return rx6600_baseline_clean(context); }
+
+static bool step_ao_plan_audio(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    m->audio = false;
+    if (!rx6600_still_valid(s)) { nx_logf("rx6600: audio-only: routing/surface proof failed"); return false; }
+    nx_audio_caps caps;
+    unsigned edid_bytes;
+    const uint8_t *edid = rx6600_edid(s, &edid_bytes);
+    if (!edid || !nx_audio_caps_from_edid(edid, edid_bytes, &caps) || !nx_audio_caps_stereo48(&caps)) { nx_logf("rx6600: audio-only: no usable audio descriptor in the monitor EDID"); return false; }
+    enum dcn302_error e = dcn302_audio_prepare(&s->io, s->route.stream, s->route.otg, m->new_khz, &caps, audio_only_guard, &s->audio_tx);
+    if (e) { nx_logf("rx6600: audio-only: endpoint %u could not be prepared (%u)", s->route.stream, (unsigned)e); return false; }
+    s->audio_caps = caps;
+    m->audio = true;
+    nx_logf("rx6600: HDMI audio planned (no mode change): endpoint %u, LPCM rates %02x, sizes %x, speakers %02x, monitor '%s'", s->route.stream,
+            caps.lpcm_rates, caps.lpcm_sizes, caps.speakers, caps.name);
+    return true;
+}
+static bool step_ao_blank(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    m->hubp_blanked = true;   /* set first: a failed blank may already have taken effect */
+    enum dcn302_hubp_error h = dcn302_hubp_blank(&s->io, s->surface.hubp, ms_now);
+    if (h) { nx_logf("rx6600: audio-only: plane could not be blanked (%u)", (unsigned)h); return false; }
+    return true;
+}
+static bool step_ao_be_off(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    m->link_is_off = true;
+    enum dcn302_hdmi_error e = dcn302_hdmi_link_disable(&s->io, s->route.link, &m->be_enable);
+    if (e) { nx_logf("rx6600: audio-only: DIG back end could not be disabled (%u)", (unsigned)e); return false; }
+    return true;
+}
+static bool undo_ao_be_off(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    if (!m->link_is_off) return true;
+    if (dcn302_hdmi_link_restore(&s->io, s->route.link, m->be_enable)) return false;
+    m->link_is_off = false;
+    return true;
+}
+static bool step_ao_be_on(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    enum dcn302_hdmi_error e = dcn302_hdmi_link_restore(&s->io, s->route.link, m->be_enable);
+    if (e) { nx_logf("rx6600: audio-only: DIG back end could not be enabled (%u)", (unsigned)e); return false; }
+    m->link_is_off = false;
+    return true;
+}
+static bool undo_ao_be_on(void *c) {
+    ms *m = c;
+    rx6600_state *s = m->s;
+    uint32_t ignored;
+    if (m->link_is_off) return true;
+    if (dcn302_hdmi_link_disable(&s->io, s->route.link, &ignored)) return false;
+    m->link_is_off = true;
+    return true;
+}
+
+static bool audio_only_once(rx6600_state *s) {
+    ms m;
+    memset(&m, 0, sizeof(m));
+    m.s = s;
+    m.new_khz = m.old_khz = s->clock.pixel_khz;
+    m.scdc_config = m.new_khz > 340000 ? 3 : 0;
+    m.target = s->route.shape;
+    m.target.pixel_khz = m.new_khz;
+    if (!s->ready || s->busy || s->firmware_poisoned) return false;
+    nx_seq_step steps[12];
+    unsigned count = 0;
+    put_step(&steps[count++], "plan-audio", step_ao_plan_audio, NULL, false);
+    put_step(&steps[count++], "blank", step_ao_blank, NULL, false);
+    put_step(&steps[count++], "stop", step_stop, NULL, false);
+    put_step(&steps[count++], "be_off", step_ao_be_off, undo_ao_be_off, true);
+    put_step(&steps[count++], "hdmi", step_hdmi, undo_hdmi, true);
+    put_step(&steps[count++], "audio", step_audio, undo_audio, true);
+    put_step(&steps[count++], "be_on", step_ao_be_on, undo_ao_be_on, true);
+    put_step(&steps[count++], "otg", step_otg, undo_otg, true);
+    put_step(&steps[count++], "verify", step_verify, NULL, false);
+    put_step(&steps[count++], "commit", step_commit, undo_commit, true);
+    put_step(&steps[count++], "settle", step_settle, NULL, false);
+    nx_logf("rx6600: HDMI audio at the running mode (%u kHz): pixel clock and transmitter stay untouched", m.new_khz);
+    s->in_modeset = true;
+    nx_seq_result r = nx_seq_run(steps, count, &m, relight, seq_log);
+    s->in_modeset = false;
+    if (r.status == NX_SEQ_OK) {
+        rx6600_commit_baseline(s);
+        s->error = RX6600_OK;
+        nx_logf("rx6600: HDMI audio is on (endpoint %u), running %u kHz", s->route.stream, s->clock.pixel_khz);
+        return true;
+    }
+    nx_logf("rx6600: HDMI audio setup failed at step %u, result %u", r.failed_step, (unsigned)r.status);
+    if (r.status == NX_SEQ_FAILED_POISONED || r.status == NX_SEQ_FAILED_RESTORED_DARK) {
+        s->ready = false;
+        s->error = RX6600_MODESET_POISONED;
+        (void)dcn302_otg_disable(&s->io, s->route.otg);
+        nx_logf("rx6600: output left OFF; driver disabled until the next boot");
+    } else {
+        s->error = RX6600_MODESET_FAILED;
+        rx6600_commit_baseline(s);
+        rx6600_resample(s);
+    }
+    return false;
+}
+
 bool rx6600_modeset(rx6600_state *s, const nexis_gpu_timing *target) {
     if (!s || !target || !s->ready || s->busy) return false;
     /* Reject impossible requests before anything is touched - including the self-test below. */
@@ -552,6 +688,13 @@ bool rx6600_modeset(rx6600_state *s, const nexis_gpu_timing *target) {
     if (target->pixel_khz < 25000 || target->pixel_khz > s->route.max_tmds_khz) { nx_logf("rx6600: %u kHz outside the connector range 25000..%u", target->pixel_khz, s->route.max_tmds_khz); return false; }
     if (s->selftest_failed) { nx_logf("rx6600: the native sequence already failed for the current mode: not tried again"); return false; }
     const bool unchanged = rx6600_is_running_mode(s, target);
+    if (!s->tables_checked) { s->tables_ok = s->firmware_check(s); s->tables_checked = true; }
+    if (!s->tables_ok) {
+        /* The pixel clock and the transmitter cannot be programmed without those commands. */
+        if (!unchanged) { nx_logf("rx6600: this GPU runs SetPixelClock/transmitter control inside its display microcontroller (DMCUB): a mode change is not available, only audio at the running mode"); return false; }
+        s->audio_tried = true;
+        return audio_only_once(s);
+    }
     if (!s->sequence_proven) {
         nexis_gpu_timing same = s->route.shape;
         same.pixel_khz = s->clock.pixel_khz;

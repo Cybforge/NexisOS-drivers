@@ -93,6 +93,7 @@ typedef struct {
     bool sequence_proven; /* the full sequence already ran once for the current mode (self-test) */
     bool audio_active;  /* AFMT audio packets are being sent (reported as NEXIS_GPU_SCANOUT_AUDIO) */
     bool audio_tried;   /* the full sequence (which sets HDMI audio up) already ran once; an unchanged mode is then not redone */
+    bool tables_checked,tables_ok;   /* the video BIOS lists SetPixelClock and the transmitter command (Navi23: it does not, Linux runs them in the DMCUB firmware) */
     bool selftest_failed; /* the native sequence failed once for the CURRENT mode: it does not work on this board, never try again */
     /* Monitor EDID read over DDC when the firmware handed none to the kernel (edid_source 2); otherwise the kernel's copy is used (source 1). */
     uint8_t edid[256];unsigned edid_bytes;uint8_t edid_source;

@@ -210,3 +210,26 @@ enum dcn302_hdmi_error dcn302_hdmi_commit(const dcn302_io *io,dcn302_hdmi_transa
     }
     t->committed=true;return DCN302_HDMI_OK;
 }
+/* Digital back end on/off without the VBIOS transmitter table. On Navi23 Linux runs that table inside the display microcontroller
+ * (DMCUB); this board's VBIOS does not even list it. Only the back-end enable bit is touched: the PHY and the pixel clock stay as the
+ * firmware left them, which is what an audio-only change at the running mode needs. */
+enum dcn302_hdmi_error dcn302_hdmi_link_disable(const dcn302_io *io,unsigned link,uint32_t *saved){
+    if(!valid(io,link) || !saved)return DCN302_HDMI_INPUT;
+    uint32_t v;
+    if(!rd(io,link,DCN302_HDMI_R_BE_ENABLE,&v))return DCN302_HDMI_IO;
+    *saved=v;
+    if(!GET(v,LINK_ENABLE))return DCN302_HDMI_OK;
+    if(!set_readback(io,link,DCN302_HDMI_R_BE_ENABLE,DCN302_HDMI_LINK_ENABLE_MASK,0,v&~DCN302_HDMI_LINK_ENABLE_MASK)){
+        (void)wr(io,link,DCN302_HDMI_R_BE_ENABLE,v);   /* a failed disable must not leave the link half off */
+        return DCN302_HDMI_READBACK;
+    }
+    return DCN302_HDMI_OK;
+}
+enum dcn302_hdmi_error dcn302_hdmi_link_restore(const dcn302_io *io,unsigned link,uint32_t saved){
+    if(!valid(io,link))return DCN302_HDMI_INPUT;
+    uint32_t v;
+    if(!rd(io,link,DCN302_HDMI_R_BE_ENABLE,&v))return DCN302_HDMI_IO;
+    if((v&DCN302_HDMI_LINK_ENABLE_MASK)==(saved&DCN302_HDMI_LINK_ENABLE_MASK))return DCN302_HDMI_OK;
+    if(!set_readback(io,link,DCN302_HDMI_R_BE_ENABLE,DCN302_HDMI_LINK_ENABLE_MASK,0,(v&~DCN302_HDMI_LINK_ENABLE_MASK)|(saved&DCN302_HDMI_LINK_ENABLE_MASK)))return DCN302_HDMI_READBACK;
+    return DCN302_HDMI_OK;
+}
