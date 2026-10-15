@@ -110,8 +110,15 @@ static void failures(void){
     for(unsigned kind=0;kind<7;kind++){
         dcn302_io io=init(&m);CHECK(dcn302_smu_open(&s,&io,now));
         switch(kind){case 0:m.features[2]=0;break;case 1:m.features[2]=33;break;case 2:m.features[2]=0x80000003;m.frequencies[2][0]=0;break;
-            case 3:m.features[2]=0x80000003;break;case 4:m.frequencies[2][0]=0;break;case 5:m.frequencies[2][1]=90;break;case 6:m.frequencies[2][2]=500;break;}
+            case 3:m.features[2]=0x80000003;m.frequencies[2][1]=90;break;case 4:m.frequencies[2][0]=0;break;case 5:m.frequencies[2][1]=90;break;case 6:m.frequencies[2][2]=500;break;}
         memset(&limits,0xa5,sizeof(limits));CHECK(!dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&limits) && !memcmp(&limits,&zero,sizeof(limits)) && !s.clocks[2].valid && !s.poisoned);cases++;
+    }
+    /* Linux dcn3_init_single_clock: a fine-grained clock (bit 31) has exactly min and max, whatever the low byte says;
+     * frequencies are the low 16 bits of the reply (Linux masks with 0xFFFF). */
+    for(unsigned low=0;low<3;low++){
+        dcn302_io io=init(&m);CHECK(dcn302_smu_open(&s,&io,now));m.features[2]=0x80000000u|(low==2?8u:low);
+        CHECK(dcn302_smu_clock_limits(&s,DCN302_SMU_UCLK,&limits) && limits.valid && limits.count==2 && limits.fine_grained &&
+              limits.frequency_mhz[0]==100 && limits.frequency_mhz[1]==600);cases++;
     }
     for(unsigned clock=0;clock<20;clock++)if(!clock_valid(clock)){
         dcn302_io io=init(&m);CHECK(dcn302_smu_open(&s,&io,now));unsigned writes=m.writes;

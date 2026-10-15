@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v4 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v5 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,27 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Vierter Hardwarelauf (2026-10-15, ohne Log) und Paket v5: Abgleich mit Linux v6.12
+
+Da kein Log vorlag, wurde der ganze Pfad (Probe und Modus-Wechsel) von einem eigenen Prüf-Lauf Zeile für Zeile mit dem echten
+Linux-Quelltext verglichen und mit den echten Registerwerten aus dem Fehlerabzug auf dem Rechner nachgestellt
+(`real_card()` in `tests/host/test_rx6600.c`). Jeder Fund ist mit einer Linux-Stelle belegt:
+
+* **Oberfläche/Pitch (stoppte die Probe bei „scan-out surface … code 3“):** die GOP lässt HUBP-`PITCH` = 1920 (0x780) stehen;
+  Linux schreibt `surface_pitch − 1` (`dcn20_hubp.c`). Beide Kodierungen werden jetzt akzeptiert (`dcn302_surface.c`).
+* **ATOM-Interpreter:** Operandenarten FB und ID waren vertauscht (Linux `atom.h`: `ATOM_ARG_FB 3`, `ATOM_ARG_ID 4`); damit
+  verlor jede Firmware-Anweisung mit solchen Operanden den Bytecode-Takt (betraf Sender-Aus/-An des Moduswechsels).
+  Außerdem Linux-gleiche Toleranz: Indirect-IO-Index endet am ersten Nicht-Start-Byte (`atom.c:1315`), PLL-/MC-Operanden lesen 0,
+  Opcodes 56/57 (setport), undefinierte indirekte Methoden lesen 0.
+* **SMU-Taktstufen:** feinkörnige Takte haben immer genau 2 Stufen, Antworten werden auf 16 Bit maskiert
+  (`dcn30_clk_mgr.c: dcn3_init_single_clock`).
+* Alle Modelltests (26 GPU-Tests) laufen; auf echter Hardware **nicht geprüft**.
+
+Offen / vermutet, **nicht** geändert (keine belegte Abweichung): ATOM-VM dekodiert Tabellen vorab strenger als Linux; Sender wird vor
+dem OTG eingeschaltet (Linux: OTG zuerst); DDC-Engine verweigert einen im GPIO-Modus belassenen Pad; SCDC wartet nur 100 ms und verlangt
+Sink-Version ≠ 0; VRAM-Tabelle wählt kein Einzelmodul wie Linux; SMU-Stufe mit 0 MHz stoppt die Probe; `SetPixelClock` setzt
+`FORCE_PROG_PPLL`; der VCO-Rückfall 3,65 GHz ist eine Annahme; 6-Gbit/s-HDMI-Fähigkeit wird bei Objekttabelle v1.5 nicht gefunden.
 
 ## Dritter Hardwarelauf (2026-10-15) und Paket v4
 

@@ -61,7 +61,7 @@ static void emit(unsigned op,unsigned attr,unsigned index,uint32_t value){
     unsigned arg=attr&7,align=(attr>>3)&7;
     if(op>=84 && op<=89)return;
     if(op>=19 && op<=30){byte(value);return;}
-    if(arg==0 || arg==3)word(value);
+    if(arg==0 || arg==4)word(value); /* Linux atom.h: ATOM_ARG_FB 3 (8-bit index), ATOM_ARG_ID 4 (16-bit index) */
     else if(arg!=5 || align>=4)byte(value);
     else if(align)word(value);
     else dword(value);
@@ -109,13 +109,13 @@ static void nested(void){
 static void memory(void){
     fixture();begin(12,0x400,4,16);
     byte(58);word(8);emit(1,5,2,7);byte(58);word(0);emit(1,5,0,3);
-    byte(102);byte(1);emit(2,3,0,4);byte(59);byte(5);dword(1020);emit(4,5,0,0x80ff2211);emit(2,4,1,0);
+    byte(102);byte(1);emit(2,4,0,4);byte(59);byte(5);dword(1020);emit(4,5,0,0x80ff2211);emit(2,3,1,0);
     byte(102);byte(255);byte(122);word(3);byte(0);byte(255);byte(67);end();
     CHECK(execute(16));CHECK(regs[0][10]==7 && regs[0][0]==12 && parameters[0]==0x12345678 && parameters[1]==0x80ff2211);
     fixture();begin(12,0x400,4,16);byte(59);byte(5);dword(1024);emit(4,5,0,1);end();CHECK(!execute(16));CHECK(vm->error==ATOM_VM_BOUNDS);
     fixture();begin(12,0x400,4,16);emit(3,5,0x43,32);end();CHECK(!execute(16));CHECK(vm->error==ATOM_VM_BOUNDS);
     fixture();begin(12,0x400,4,16);emit(2,5,0,1);emit(20,0,0,32);end();CHECK(!execute(16));CHECK(vm->error==ATOM_VM_BOUNDS);
-    fixture();begin(12,0x400,4,16);byte(102);byte(255);emit(2,3,0,65535);end();CHECK(!execute(16));CHECK(vm->error==ATOM_VM_BOUNDS);
+    fixture();begin(12,0x400,4,16);byte(102);byte(255);emit(2,4,0,65535);end();CHECK(!execute(16));CHECK(vm->error==ATOM_VM_BOUNDS);
 }
 static void wide_math(void){
     fixture();begin(12,0x400,4,16);parameters[0]=0xffffffff;
@@ -146,6 +146,8 @@ static void indirect_io(void){
     rom_bytes[p++]=3;w16(p,4);p+=2;rom_bytes[p++]=9;p+=2;w16(0x350,p-0x350);
     regs[0][3]=0xa1234567;begin(12,0x400,4,16);byte(55);word(1);emit(2,0,0,9);emit(1,5,9,0x89abcdef);end();
     CHECK(execute(16));CHECK(parameters[0]==0xa1234567 && regs[0][4]==0x89abcdef);
+    /* Linux atom_index_iio stops at the first byte that is not ATOM_IIO_START: padding after the last method is accepted. */
+    w16(0x350,p-0x350+6);regs[0][4]=0;CHECK(execute(16));CHECK(regs[0][4]==0x89abcdef);w16(0x350,p-0x350);
     /* Reject an indirect descriptor with a 33-bit field at initialization. */
     rom_bytes[0x354+2+3+3+2+3+1]=33;checksum();atom_rom rom;atom_vm_io io={NULL,read_reg,write_reg,delay,clock_us};
     CHECK(atom_rom_open(rom_bytes,sizeof(rom_bytes),0x1002,0x73ff,&rom));CHECK(!atom_vm_init(vm,&rom,&io,scratch,1024));cases++;

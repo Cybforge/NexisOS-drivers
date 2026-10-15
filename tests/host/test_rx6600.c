@@ -260,7 +260,7 @@ static void failures(void){
             case 4:k.rom_bytes=1;break;case 5:m.rom[100]^=1;break;case 6:m.vram.flags=1;break;
             case 7:m.registers.flags=1;break;case 8:m.registers.bytes=4096;break;case 9:m.vram.base++;break;
             case 10:m.hpd[1]=0;break;case 11:m.otg[3][DCN302_R_CONTROL]=0;break;
-            case 12:m.surface[1][DCN302_SURFACE_R_PITCH]++;break;case 13:m.frozen=true;break;
+            case 12:m.surface[1][DCN302_SURFACE_R_PITCH]+=2;break; /* PITCH == pitch (GOP) and PITCH == pitch-1 (Linux) are both valid */case 13:m.frozen=true;break;
             case 14:k.pitch=1919;break;case 15:k.format=2;break;case 16:m.period=2000;break;
             case 17:k.write32=NULL;break;case 18:m.smu_version=0;break;case 19:m.smu_interface=0x3f;break;
             case 20:m.smu_header=2;break;case 21:m.smu_features=0;break;case 22:m.smu_status=0xfe;break;case 23:m.smu_response=0xab;break;
@@ -305,6 +305,43 @@ static void failures(void){
     init(&m,&k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(&s,&k)==RX6600_OK);const uint32_t hpd_high=m.hpd[1];
     m.hpd[1]=0;rx6600_poll(&s);CHECK(s.ready && s.hpd_lost_us);m.hpd[1]=hpd_high;rx6600_poll(&s);CHECK(s.ready && !s.hpd_lost_us);
     m.hpd[1]=0;rx6600_poll(&s);CHECK(s.ready);m.time+=4000000;rx6600_poll(&s);CHECK(!s.ready);cases++;
+}
+/* The register values the owner's real RX 6600 (1002:73ff, GOP 1920x1080 over HDMI) showed in the run-3 failure dump.
+ * Registers that were not dumped keep the Linux-convention values of init(). */
+static void real_card_init(model *m,nexis_gpu_services *k){
+    init(m,k,0,0,0,1,2,0,0,0,1);
+    m->vram=(nexis_gpu_resource){0x7fe0000000ULL,0x10000000ULL,7,0};m->registers=(nexis_gpu_resource){0xfca00000,0x100000,9,0};
+    k->framebuffer=0x7fe0000000ULL;k->pitch=1920;k->framebuffer_bytes=1920u*4*1080;
+    m->fb_base=0x8000;m->fb_top=0x81ff;m->fb_offset=0;
+    m->smu_argument=0;m->smu_response=0;
+    m->dfs_pll=0x10000001;m->dfs_dentist=0x4c194c4c;m->dfs_control=0;
+    m->reference=0;m->timer=0x1002;
+    for(unsigned i=0;i<5;i++){
+        m->dig[i][DCN302_HDMI_R_BE]=i?0x00010000u:0x20020100u;m->dig[i][DCN302_HDMI_R_BE_ENABLE]=i?0x100u:0x101u;
+        m->dig[i][DCN302_HDMI_R_FE]=i?0:0x01000000u;m->hpd[i]=i==2?0x12u:0;
+        if(i)m->otg[i][DCN302_R_CONTROL]=0x300;
+    }
+    uint32_t *o=m->otg[0];o[DCN302_R_CONTROL]=0x00010301;
+    /* CEA 1080p60 (2200x1125, 148.5 MHz) in the Linux optc1_program_timing encoding. */
+    o[DCN302_R_H_TOTAL]=0x897;o[DCN302_R_H_BLANK]=2112|(192u<<16);o[DCN302_R_H_SYNC]=44u<<16;
+    o[DCN302_R_V_TOTAL]=0x464;o[DCN302_R_V_BLANK]=1121|(41u<<16);o[DCN302_R_V_SYNC]=5u<<16;
+    m->period=16667;
+    uint32_t *h=m->surface[0];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_CLOCK]=0x00f11111;h[DCN302_SURFACE_R_HUBP]=0x000f0002;
+    h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0;h[DCN302_SURFACE_R_ADDRESS_HIGH]=h[DCN302_SURFACE_R_INUSE_HIGH]=0x80;
+    h[DCN302_SURFACE_R_PITCH]=0x780; /* the GOP programs PITCH = 1920 for its 1920-pixel framebuffer (Linux would write pitch-1) */
+    for(unsigned r=0;r<DCN302_SURFACE_REGISTER_COUNT;r++)for(unsigned q=0;q<DCN302_HUBP_REGISTER_COUNT;q++)
+        if(dcn302_surface_register_bytes[0][r]==dcn302_hubp_register_bytes[0][q])m->hubp[0][q]=h[r];
+}
+static void real_card(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    real_card_init(&m,&k);
+    enum rx6600_error e=rx6600_probe(&s,&k);
+    if(e)fprintf(stderr,"real-card probe error %u\n",(unsigned)e);
+    CHECK(e==RX6600_OK && s.ready && !m.writes);
+    CHECK(s.route.link==0 && s.route.stream==0 && s.route.otg==0 && s.route.hpd==2 && s.surface.hubp==0 && s.surface.pitch==1920);
+    CHECK(s.dfs.vco_default && s.dfs.vco_khz==3650000 && s.clock.pixel_khz>148000 && s.clock.pixel_khz<149000);
+    CHECK(rx6600_read_mode(&s,&out) && out.framebuffer==0x7fe0000000ULL && out.pitch==1920 && out.timing.hactive==1920 && out.timing.vactive==1080);
+    rx6600_shutdown(&s);cases++;
 }
 typedef bool (NEXIS_GPU_CALL *pic_floor)(void *,enum dcn302_smu_clock,uint32_t,uint32_t *);
 static void retained(nexis_gpu_entry_v2 entry,uintptr_t floor_address,uintptr_t dfs_address,uintptr_t bandwidth_address,uintptr_t hubp_address,uintptr_t timing_address,uintptr_t dpp_address){
@@ -626,12 +663,12 @@ static void firmware_fixture(model *m,unsigned kind){
             b[p++]=55;p16(b+p,1);p+=2;
         }
         if(kind==3 && n==0){b[p++]=1;b[p++]=5;p16(b+p,0);p+=2;p32(b+p,0x1234);p+=4;}
-        else if((kind==4 || kind==5) && n==0){ /* Legacy operands must fail, never return fake0. */
+        else if((kind==4 || kind==5) && n==0){ /* PLL/MC operands: Linux amdgpu reads 0 and drops writes (cail_pll_read/write, cail_mc_read/write), no hardware access. */
             b[p++]=kind==4?5:6;b[p++]=1;b[p++]=9;b[p++]=0;
         }else if(kind==6 && n==0){ /* Firmware must not enable scanout on its own. */
             b[p++]=1;b[p++]=5;p16(b+p,dcn302_register_bytes[3][DCN302_R_CONTROL]/4);p+=2;p32(b+p,DCN302_MASTER_ENABLE_MASK);p+=4;
         }else if(kind==7 && n==0){
-            b[p++]=1;b[p++]=1;p16(b+p,0x2000);p+=2;b[p++]=0;b[p++]=56;
+            b[p++]=1;b[p++]=1;p16(b+p,0x2000);p+=2;b[p++]=0;b[p++]=83; /* REPEAT: unimplemented in Linux atom.c too */
         } /* Unsupported op after a structurally valid write is preflighted first. */
         else if(kind==8 && n==0){b[p++]=81;b[p++]=10;} /* Native guarded delay. */
         else if(kind==9 && n==0){ /* Read source, then write its result. */
@@ -641,7 +678,7 @@ static void firmware_fixture(model *m,unsigned kind){
             b[p++]=55;p16(b+p,1);p+=2;b[p++]=13;b[p++]=5;p16(b+p,9);p+=2;p32(b+p,2);p+=4;
         }else if(kind==11 && n==0){ /* Runtime unsupported operand after a posted write. */
             b[p++]=1;b[p++]=1;p16(b+p,0x2000);p+=2;b[p++]=0;
-            b[p++]=5;b[p++]=1;b[p++]=9;b[p++]=0;
+            b[p++]=2;b[p++]=4;b[p++]=0;p16(b+p,0xffff);p+=2; /* MOVE PS0 <- ID[0xffff]: outside the image at run time */
         }else if(kind==12 && n==0){
             for(unsigned r=0;r<2;r++){b[p++]=1;b[p++]=1;p16(b+p,0x2000+r);p+=2;b[p++]=0;}
         }
@@ -691,7 +728,13 @@ static void firmware_cases(nexis_gpu_entry_v2 entry,uintptr_t command_address,ui
             !s->display_clocks(s,NULL,RX6600_DFS_RESTORE) && !s->clock_floor(s,DCN302_SMU_PHYCLK,600,&acknowledged) && m.writes==done);
         out.shutdown(s);cases++;
     }
-    for(unsigned kind=4;kind<8;kind++){
+    for(unsigned kind=4;kind<6;kind++){
+        s=prepare_firmware(entry,&m,&k,&out,kind);unsigned start=m.writes;
+        CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->timing_transaction.timing.pixel_khz,0)==ATOM_VM_OK &&
+            !s->firmware_changed && !s->firmware_poisoned && s->ready && m.writes==start && !m.firmware_writes && !m.invalid);
+        CHECK(s->dpp_registers(s,RX6600_DPP_RESTORE));CHECK(s->bandwidth_registers(s,NULL,false,RX6600_HUBP_RESTORE));out.shutdown(s);cases++;
+    }
+    for(unsigned kind=6;kind<8;kind++){
         s=prepare_firmware(entry,&m,&k,&out,kind);unsigned start=m.writes;
         CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->timing_transaction.timing.pixel_khz,0)==ATOM_VM_UNSUPPORTED &&
             !s->firmware_changed && !s->firmware_poisoned && s->ready && m.writes==start && !m.firmware_writes && !m.invalid);
@@ -796,7 +839,7 @@ static void firmware_robustness(nexis_gpu_entry_v2 entry){
     CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_IO);
     CHECK(m.delays==m.fail_delay);firmware_stopped_failure(&m,s,start);out.shutdown(s);cases++;
     s=prepare_firmware(entry,&m,&k,&out,11);start=m.writes;
-    CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_UNSUPPORTED && m.firmware_writes==1);
+    CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_BOUNDS && m.firmware_writes==1);
     firmware_stopped_failure(&m,s,start+1);out.shutdown(s);cases++;
     for(unsigned posted=0;posted<2;posted++)for(unsigned n=1;n<=2;n++){
         s=prepare_firmware(entry,&m,&k,&out,12);start=m.writes;m.fail_mmio_write=start+n;m.posted=posted;
@@ -836,6 +879,11 @@ static void firmware_robustness(nexis_gpu_entry_v2 entry){
     CHECK(s->firmware_command(s,ATOM_DISPLAY_PIXEL_CLOCK,s->clock.pixel_khz,0)==ATOM_VM_OK);start=m.writes;
     for(unsigned space=ATOM_VM_PLL;space<=3;space++){
         uint32_t value=123;s->firmware_error=ATOM_VM_OK;
+        if(space<=ATOM_VM_MC){ /* Linux amdgpu cail_pll/mc_read return 0, the writes do nothing: no hardware access */
+            CHECK(invoke_firmware_read(entry,s,(enum atom_vm_space)space,0,&value) && !value && s->firmware_error==ATOM_VM_OK);
+            CHECK(invoke_firmware_write(entry,s,(enum atom_vm_space)space,0,1) && m.writes==start && !m.invalid && !s->firmware_changed);cases++;
+            continue;
+        }
         CHECK(!invoke_firmware_read(entry,s,(enum atom_vm_space)space,0,&value) && !value && s->firmware_error==ATOM_VM_UNSUPPORTED);
         CHECK(!invoke_firmware_write(entry,s,(enum atom_vm_space)space,0,1) && m.writes==start && !m.invalid);cases++;
     }
@@ -873,5 +921,5 @@ static void pic(const char *path,unsigned floor_offset,unsigned dfs_offset,unsig
     for(unsigned n=0;n<2;n++)CHECK(VirtualFree(bases[n],0,MEM_RELEASE));
     free(data);
 }
-int main(int argc,char **argv){CHECK(argc==12);normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
+int main(int argc,char **argv){CHECK(argc==12);real_card();normal();failures();retained(driver_init_v2,0,0,0,0,0,0);timing_losses(driver_init_v2);dpp_faults(driver_init_v2);firmware_cases(driver_init_v2,0,0,0,0);firmware_robustness(driver_init_v2);pic(argv[1],(unsigned)strtoul(argv[2],NULL,10),(unsigned)strtoul(argv[3],NULL,10),(unsigned)strtoul(argv[4],NULL,10),(unsigned)strtoul(argv[5],NULL,10),(unsigned)strtoul(argv[6],NULL,10),(unsigned)strtoul(argv[7],NULL,10),(unsigned)strtoul(argv[8],NULL,10),(unsigned)strtoul(argv[9],NULL,10),(unsigned)strtoul(argv[10],NULL,10),(unsigned)strtoul(argv[11],NULL,10));
     printf("{\"passed\":true,\"cases\":%u,\"native_rx6600_retained_backend\":true,\"real_pic_callbacks_executed\":true,\"distinct_pic_bases_verified\":true,\"native_smu_probe_integrated\":true,\"real_pic_clock_floor_command_executed\":true,\"real_pic_display_clock_transaction_executed\":true,\"real_pic_bandwidth_plan_executed\":true,\"atom_memory_topology_integrated\":true,\"mode_changing_transaction_complete\":false,\"firmware_mailbox_writes\":true,\"clock_floor_changes_modeled\":true,\"display_clock_writes_modeled\":true,\"physical_hardware_verified\":false}\n",cases);return 0;}

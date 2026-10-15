@@ -197,6 +197,9 @@ static bool firmware_read(void *context,enum atom_vm_space space,uint32_t index,
     rx6600_state *s=context;uint32_t offset,value;
     if(!out)return firmware_fault(s,ATOM_VM_INPUT);
     *out=0;
+    /* Linux amdgpu_atombios.c: cail_pll_read() and cail_mc_read() "return 0;" - the ATOM PLL/MC spaces have no
+     * hardware behind them on amdgpu ASICs, so a VBIOS table touching them reads 0 instead of aborting. */
+    if(space==ATOM_VM_PLL || space==ATOM_VM_MC)return true;
     if(!firmware_offset(s,space,index,&offset))return false;
     if(!firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
     if(!s->io.read(s,offset,&value))return firmware_fault(s,ATOM_VM_IO);
@@ -205,6 +208,7 @@ static bool firmware_read(void *context,enum atom_vm_space space,uint32_t index,
 }
 static bool firmware_write(void *context,enum atom_vm_space space,uint32_t index,uint32_t value){
     rx6600_state *s=context;uint32_t offset;
+    if(space==ATOM_VM_PLL || space==ATOM_VM_MC)return true;   /* Linux cail_pll_write()/cail_mc_write() are empty */
     if(!firmware_offset(s,space,index,&offset))return false;
     if(!firmware_guard(s))return firmware_fault(s,ATOM_VM_IO);
     /* Pixel/PHY/stream setup must not start any scanout before the parent

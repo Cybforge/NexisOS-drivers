@@ -68,7 +68,7 @@ static void invalid(void){
             case 13:h[DCN302_SURFACE_R_CLOCK]=0;break;case 14:h[DCN302_SURFACE_R_CLOCK]&=~DCN302_SURFACE_CLOCK_ENABLE_MASK;break;
             case 15:h[DCN302_SURFACE_R_CONTROL]=DCN302_SURFACE_DCC_MASK;break;case 16:h[DCN302_SURFACE_R_CONTROL]=DCN302_SURFACE_TMZ_MASK;break;
             case 17:h[DCN302_SURFACE_R_INUSE_HIGH]|=DCN302_SURFACE_VMID_MASK;break;case 18:h[DCN302_SURFACE_R_VIEW_START]=1;break;
-            case 19:h[DCN302_SURFACE_R_VIEW_SIZE]=0;break;case 20:h[DCN302_SURFACE_R_PITCH]++;break;
+            case 19:h[DCN302_SURFACE_R_VIEW_SIZE]=0;break;case 20:h[DCN302_SURFACE_R_PITCH]+=2;break; /* PITCH==pitch (GOP) is valid too */
             case 21:h[DCN302_SURFACE_R_CROSSBAR]=0;break;case 22:h[DCN302_SURFACE_R_ADDRESS]++;break;
             case 23:m.top=m.base-1;break;case 24:m.base++;break; /* address below FB_BASE */
             case 25:h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0x0fc00000;break;
@@ -82,6 +82,8 @@ static void invalid(void){
     CHECK(dcn302_surface_bind(&io,&r,bar,bar_bytes,gop+4,gop_bytes,2048,1,&s)==DCN302_SURFACE_BOUNDS);cases++;
     CHECK(dcn302_surface_bind(&io,&r,bar,bar_bytes,gop,gop_bytes,1919,1,&s)==DCN302_SURFACE_INPUT);cases++;
     CHECK(dcn302_surface_bind(&io,&r,bar,bar_bytes,gop,gop_bytes,2048,2,&s)==DCN302_SURFACE_INPUT);cases++;
+    /* The RX 6600 GOP leaves PITCH = pitch (0x780 for 1920), Linux writes pitch-1: both bind. */
+    init(&m,&io,&r,0,2,4,1);m.regs[4][DCN302_SURFACE_R_PITCH]++;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK && s.pitch==2048);cases++;
     init(&m,&io,&r,0,2,4,1);CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);unsigned ops=m.ops;
     for(unsigned op=1;op<=ops;op++){
         init(&m,&io,&r,0,2,4,1);m.fail=op;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_IO && !memcmp(&s,&zero,sizeof(s)));cases++;

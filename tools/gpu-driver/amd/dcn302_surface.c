@@ -28,7 +28,9 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
        GET(regs[DCN302_SURFACE_R_CONTROL],DCC) || GET(regs[DCN302_SURFACE_R_CONTROL],TMZ) || GET(regs[DCN302_SURFACE_R_INUSE_HIGH],VMID))return DCN302_SURFACE_UNSUPPORTED;
     if(GET(regs[DCN302_SURFACE_R_VIEW_START],X) || GET(regs[DCN302_SURFACE_R_VIEW_START],Y) ||
        GET(regs[DCN302_SURFACE_R_VIEW_SIZE],WIDTH)!=route->shape.hactive || GET(regs[DCN302_SURFACE_R_VIEW_SIZE],HEIGHT)!=route->shape.vactive ||
-       GET(regs[DCN302_SURFACE_R_PITCH],PITCH)+1!=pitch)return DCN302_SURFACE_UNSUPPORTED;
+       (GET(regs[DCN302_SURFACE_R_PITCH],PITCH)+1!=pitch && GET(regs[DCN302_SURFACE_R_PITCH],PITCH)!=pitch))return DCN302_SURFACE_UNSUPPORTED;
+    /* Linux (dcn20_hubp.c hubp2_program_size) writes PITCH = surface_pitch - 1, but the RX 6600's GOP left PITCH = 0x780 = 1920
+     * for its 1920-pixel desktop: accept both encodings of the firmware's pitch (this module never rewrites PITCH). */
     uint32_t crossbar=regs[DCN302_SURFACE_R_CROSSBAR];
     if(GET(crossbar,GREEN)!=1 || GET(crossbar,RED)!=(format?3u:2u) || GET(crossbar,BLUE)!=(format?2u:3u))return DCN302_SURFACE_UNSUPPORTED;
     uint64_t addr=((uint64_t)GET(regs[DCN302_SURFACE_R_ADDRESS_HIGH],HIGH)<<32)|regs[DCN302_SURFACE_R_ADDRESS];

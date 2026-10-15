@@ -24,7 +24,10 @@
  */
 #include "atom_vm.h"
 #include <string.h>
-enum { REG,PS,WS,ID,FB,IMM,PLL,MC };
+/* Raw ATOM argument numbers, exactly Linux v6.12 amdgpu/atom.h: ATOM_ARG_REG 0, PS 1, WS 2, FB 3, ID 4, IMM 5, PLL 6, MC 7.
+ * (FB and ID were swapped here before, so every real-VBIOS source operand of type FB or ID was decoded with the wrong
+ * index width and the following bytecode was misparsed.) */
+enum { REG,PS,WS,FB,ID,IMM,PLL,MC };
 enum { MOVE,AND,OR,LEFT,RIGHT,MUL,DIV,ADD,SUB,COMPARE,TEST,CLEAR,MASK,XOR,SHL,SHR,MUL32,DIV32 };
 static const uint32_t masks[8]={0xffffffff,0xffff,0xffff00,0xffff0000,0xff,0xff00,0xff0000,0xff000000};
 static const uint8_t shifts[8]={0,0,8,16,0,8,16,24};
@@ -113,6 +116,7 @@ static bool decode(atom_vm *v,atom_vm_frame *f,unsigned pc,instruction *i){
         case 67: case 68: case 69: case 70: case 71: case 72: case 73:
             if(!take(v,f,&pc,2,&a))return false;
             i->target=a;break;
+        case 56: case 57: /* SET_PCI_PORT / SET_SYSIO_PORT: one operand byte (Linux atom_op_setport) */
         case 80: case 81: case 82: case 98: case 102: case 121:
             if(!take(v,f,&pc,1,&a))return false;
             i->extra=a;break;
@@ -204,6 +208,8 @@ static bool get(atom_vm *v,atom_vm_frame *f,operand o,uint32_t *value,uint32_t *
             if(n>0xffffffff-v->reg_block)return fail(v,ATOM_VM_BOUNDS);
             n+=v->reg_block;
             if(!v->io_mode){if(!hardware_read(v,ATOM_VM_MMIO,n,&x))return false;}
+            /* Linux atom_get_src_int: PCI/SYSIO "not implemented" and an undefined indirect method read 0. */
+            else if(!(v->io_mode&128) || !v->indirect_begin[v->io_mode&127]){*value=0;if(raw)*raw=0;return true;}
             else if(!indirect(v,v->io_mode&127,n,0,&x))return false;
             break;
         case PLL:case MC:if(!hardware_read(v,o.arg==PLL?ATOM_VM_PLL:ATOM_VM_MC,n,&x))return false;break;
@@ -234,6 +240,8 @@ static bool put(atom_vm *v,atom_vm_frame *f,operand o,uint32_t x,uint32_t raw){
             if(n>0xffffffff-v->reg_block)return fail(v,ATOM_VM_BOUNDS);
             n+=v->reg_block;
             if(!v->io_mode)return hardware_write(v,ATOM_VM_MMIO,n,n?value:value<<2);
+            /* Linux atom_put_dst: PCI/SYSIO and an undefined indirect write method (iio[io_mode & 0xFF]) are skipped. */
+            if(!(v->io_mode&128) || !v->indirect_begin[v->io_mode&255])return true;
             return indirect(v,v->io_mode,n,value,&x);
         case PLL:case MC:return hardware_write(v,o.arg==PLL?ATOM_VM_PLL:ATOM_VM_MC,n,value);
         case PS:f->parameters[n]=value;return true;
@@ -291,6 +299,7 @@ static bool run(atom_vm *v,unsigned command,uint32_t *ps,unsigned words,unsigned
             if(write && !put(v,f,i.dst,dst,raw))return false;
         }else switch(i.opcode){
             case 55:v->io_mode=i.extra?i.extra|128:0;break;
+            case 56:v->io_mode=1;break;case 57:v->io_mode=2;break; /* ATOM_IO_PCI / ATOM_IO_SYSIO */
             case 58:v->reg_block=i.extra;break;
             case 59:{
                 uint32_t value;
@@ -349,10 +358,11 @@ bool atom_vm_init(atom_vm *v,const atom_rom *rom,const atom_vm_io *io,uint8_t *s
     if(entries<=23 || !le16(v->rom.image+master+4+23*2)){v->ready=true;return true;}
     if(!atom_rom_table(&v->rom,false,23,&t))return fail(v,ATOM_VM_TABLE);
     const uint8_t *b=t.bytes;unsigned pc=4;
-    while(pc<t.size){
-        if(b[pc]!=1 || !span(t.size,pc,2))return fail(v,ATOM_VM_BYTECODE);
+    /* Linux atom.c atom_index_iio: "while (CU8(base) == ATOM_IIO_START)" - indexing simply stops at the first byte that
+     * does not start a method (table padding), and a repeated id replaces the earlier one. */
+    while(pc<t.size && b[pc]==1){
+        if(!span(t.size,pc,2))return fail(v,ATOM_VM_BYTECODE);
         unsigned id=b[pc+1];pc+=2;
-        if(v->indirect_begin[id])return fail(v,ATOM_VM_BYTECODE);
         unsigned start=pc;
         while(pc<t.size && b[pc]!=9){
             unsigned op=b[pc],n=op==0?1:op<=5?3:4;

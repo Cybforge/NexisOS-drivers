@@ -374,6 +374,7 @@ static void explain(const model *m,const snap *s){
 static nexis_gpu_timing mode_for(const nexis_gpu_timing *base,unsigned vtotal,unsigned hz){
     nexis_gpu_timing t=*base;t.vtotal=vtotal;t.pixel_khz=(uint32_t)((uint64_t)t.htotal*vtotal*hz/1000);return t;
 }
+static bool running0(const model *m){return (m->otg[0][DCN302_R_CONTROL]&(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK))==(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK);}
 static bool running(const model *m){return (m->otg[3][DCN302_R_CONTROL]&(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK))==(DCN302_MASTER_ENABLE_MASK|DCN302_MASTER_ACTIVE_MASK);}
 static void start(model *m,nexis_gpu_services *k,rx6600_state *s){
     init(m,k,4,0,3,2,1,2,4,1,1);CHECK(rx6600_probe(s,k)==RX6600_OK);doubles(s);
@@ -494,8 +495,40 @@ static void inject(bool proven){
      * to 'before'; the invariant here is only: no violation, and either running or fully off. */
     CHECK(!m.invalid && !s.in_modeset && (s.ready?running(&m):all_stopped(&m)));cases++;
 }
+/* ---- scenario 0: the owner's real card as the GOP left it (run-3 register dump): 1080p60 CEA (148.5 MHz) in DVI-mode
+ * TMDS on DIG link 0 / stream 0 / OTG 0 / HPD index 2, PITCH 0x780, FB_OFFSET 0, PLL_REQ 0x10000001, DENTIST 0x4c194c4c.
+ * Firmware commands are the test double; this checks the module's own register paths on the real starting state. */
+static void real_card(void){
+    model m;nexis_gpu_services k;rx6600_state s;nexis_gpu_scanout out;
+    init(&m,&k,0,0,0,1,2,0,0,0,1);
+    m.vram=(nexis_gpu_resource){0x7fe0000000ULL,0x10000000ULL,7,0};m.registers=(nexis_gpu_resource){0xfca00000,0x100000,9,0};
+    k.framebuffer=0x7fe0000000ULL;k.pitch=1920;k.framebuffer_bytes=1920u*4*1080;m.fb_offset=0;
+    m.smu_argument=0;m.smu_response=0;m.dfs_pll=0x10000001;m.dfs_dentist=0x4c194c4c;m.dfs_control=0;m.reference=0;m.timer=0x1002;
+    m.pixel_khz=m.pll_khz=148500;m.scdc[0x20]=0;
+    for(unsigned i=0;i<5;i++){
+        m.dig[i][DCN302_HDMI_R_BE]=i?0x00010000u:0x20020100u;m.dig[i][DCN302_HDMI_R_BE_ENABLE]=i?0x100u:0x101u;
+        m.dig[i][DCN302_HDMI_R_FE]=i?0:0x01000000u;m.hpd[i]=i==2?0x12u:0;
+        if(i)m.otg[i][DCN302_R_CONTROL]=0x300;
+    }
+    m.dig[0][DCN302_HDMI_R_CONTROL]=0; /* DVI mode: no scrambling */
+    uint32_t *o=m.otg[0];o[DCN302_R_CONTROL]=0x00010301;
+    o[DCN302_R_H_TOTAL]=0x897;o[DCN302_R_H_BLANK]=2112|(192u<<16);o[DCN302_R_H_SYNC]=44u<<16;
+    o[DCN302_R_V_TOTAL]=0x464;o[DCN302_R_V_BLANK]=1121|(41u<<16);o[DCN302_R_V_SYNC]=5u<<16;
+    uint32_t *h=m.surface[0];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_CLOCK]=0x00f11111;h[DCN302_SURFACE_R_HUBP]=0x000f0002;
+    h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0;h[DCN302_SURFACE_R_ADDRESS_HIGH]=h[DCN302_SURFACE_R_INUSE_HIGH]=0x80;h[DCN302_SURFACE_R_PITCH]=0x780;
+    enum rx6600_error e=rx6600_probe(&s,&k);
+    if(e)fprintf(stderr,"real-card probe error %u\n",(unsigned)e);
+    CHECK(e==RX6600_OK);doubles(&s);
+    CHECK(rx6600_read_mode(&s,&out) && out.timing.htotal==2200 && out.timing.vtotal==1125);
+    /* The monitor's 240 Hz timing (as in the EDID of build_edid). */
+    nexis_gpu_timing t240={.hactive=1920,.hsync_start=1968,.hsync_end=2000,.htotal=2080,.vactive=1080,.vsync_start=1083,.vsync_end=1088,.vtotal=1118,.flags=out.timing.flags,.pixel_khz=558195};
+    bool ok=rx6600_set_mode(&s,&t240);
+    if(!ok)fprintf(stderr,"real-card switch to 240 Hz failed, error %u\n",(unsigned)s.error);
+    CHECK(ok && s.ready && running0(&m) && ppm_close(m.pixel_khz,t240.pixel_khz) && m.scdc[0x20]==3 && !m.invalid);
+    CHECK(rx6600_read_mode(&s,&out) && nexis_gpu_mode_readback_matches(&out,&t240));cases++;
+}
 int main(void){
-    switches();no_scdc();inject(true);inject(false);
+    real_card();switches();no_scdc();inject(true);inject(false);
     printf("{\"passed\":true,\"cases\":%u,\"failures_restored_with_picture\":%u,\"failures_ended_with_output_off\":%u,\"faulted_switches_that_still_completed_with_audio\":%u,\"switches_completed_video_only_after_audio_fault\":%u,\"modeled_only\":true,\"physical_hardware_verified\":false}\n",cases,restored,switched_off,harmless,video_only);
     return 0;
 }

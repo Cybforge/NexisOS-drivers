@@ -118,13 +118,16 @@ bool dcn302_smu_clock_limits(dcn302_smu *s,enum dcn302_smu_clock clock,dcn302_sm
     memset(&s->clocks[clock],0,sizeof(s->clocks[clock]));
     uint32_t features;
     if(!send(s,MSG_DPM,(uint32_t)clock<<16|0xff,&features))return false;
-    unsigned count=features&0xff;bool fine=(features&0x80000000u)!=0;
-    if(!count || count>DCN302_SMU_MAX_LEVELS || (fine && count!=2))return error(s,DCN302_SMU_PROTOCOL,false);   /* Linux uses only bit 31 and the low byte */
+    /* Linux dcn30_clk_mgr.c dcn3_init_single_clock: bit 31 set = fine-grained, "only min and max" -> exactly 2 levels
+     * whatever the low byte says; otherwise the low byte is the number of discrete levels. */
+    bool fine=(features&0x80000000u)!=0;unsigned count=fine?2u:(features&0xff);
+    if(!count || count>DCN302_SMU_MAX_LEVELS)return error(s,DCN302_SMU_PROTOCOL,false);
     dcn302_smu_limits limits={0};limits.count=(uint8_t)count;limits.features=features&0x800000ffu;limits.fine_grained=fine;
     for(unsigned n=0;n<count;n++){
         uint32_t mhz;
         if(!send(s,MSG_DPM,(uint32_t)clock<<16|n,&mhz))return false;
-        if(!mhz || mhz>UINT16_MAX || (n && mhz<limits.frequency_mhz[n-1]))return error(s,DCN302_SMU_PROTOCOL,false);
+        mhz&=0xffffu;   /* "Frequency in MHz returned in lower 16 bits" (Linux dcn30_clk_mgr_smu_msg.c); Linux masks with 0xFFFF */
+        if(!mhz || (n && mhz<limits.frequency_mhz[n-1]))return error(s,DCN302_SMU_PROTOCOL,false);
         limits.frequency_mhz[n]=(uint16_t)mhz;
     }
     limits.valid=true;s->clocks[clock]=limits;*out=limits;return true;

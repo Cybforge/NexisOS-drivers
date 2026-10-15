@@ -75,7 +75,7 @@ report = {
     'native_dcn302_hdmi_calls_board_firmware': True,
     'native_hdmi_also_requires_pixel_resync': True,
     'nominal_pll_parameters_are_not_measured_clock': True,
-    'scope': 'Bounded direct BAR5 MMIO and ROM-selected IIO. Legacy PLL/MC operands, out-of-resource accesses and early scanout activation fail explicitly. No invented PCIe fallback. No claim of complete physical modeset or HDMI audio.',
+    'scope': 'Bounded direct BAR5 MMIO and ROM-selected IIO. Legacy PLL/MC operands read 0 and drop writes exactly like amdgpu cail_pll_*/cail_mc_*; out-of-resource accesses and early scanout activation fail explicitly. No invented PCIe fallback. No claim of complete physical modeset or HDMI audio.',
     'source_sha256': {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in (
         'scripts/verify_rx6600_firmware_reference.py', 'tools/gpu-driver/amd/rx6600.c',
         'tools/gpu-driver/amd/rx6600.h', 'tools/gpu-driver/amd/atom_vm.c',
