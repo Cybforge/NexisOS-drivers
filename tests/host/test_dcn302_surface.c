@@ -59,8 +59,8 @@ static void invalid(void){
         init(&m,&io,&r,0,2,4,1);uint32_t *h=m.regs[4];
         switch(kind){
             case 0:m.regs[0][DCN302_SURFACE_R_OUT_MUX]=15;break;
-            case 1:m.regs[2][DCN302_SURFACE_R_TOP]=15;break;case 2:m.regs[2][DCN302_SURFACE_R_BOTTOM]=2;break;
-            case 3:m.regs[2][DCN302_SURFACE_R_OPP]=1;break;case 4:m.regs[2][DCN302_SURFACE_R_MODE]=0;break;   /* bypass */
+            case 1:m.regs[2][DCN302_SURFACE_R_TOP]=15;break;case 2:m.regs[2][DCN302_SURFACE_R_BOTTOM]=3;break;   /* another MPCC below: a second layer */
+            case 3:m.regs[2][DCN302_SURFACE_R_OPP]=1;break;case 4:m.regs[2][DCN302_SURFACE_R_TOP]=7;break;
             case 5:h[DCN302_SURFACE_R_CONFIG]=10;break;case 6:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ROTATION_MASK;break;
             case 7:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_MIRROR_MASK;break;case 8:h[DCN302_SURFACE_R_CONFIG]|=DCN302_SURFACE_ALPHA_MASK;break;
             case 9:h[DCN302_SURFACE_R_TILING]=1;break;case 10:h[DCN302_SURFACE_R_HUBP]=DCN302_SURFACE_BLANK_MASK;break;
@@ -79,7 +79,10 @@ static void invalid(void){
         }
         memset(&s,0xa5,sizeof(s));CHECK(bind(&m,&io,&r,1,&s)!=DCN302_SURFACE_OK && !memcmp(&s,&zero,sizeof(s)));cases++;
     }
-    for(unsigned mode=1;mode<=3;mode++){   /* MPCC passthrough / top only / blending with no bottom layer: all show the plane as is */
+    init(&m,&io,&r,0,2,4,1);m.regs[2][DCN302_SURFACE_R_BOTTOM]=2;   /* BOT_SEL = own id, as on the real card */
+    CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
+    init(&m,&io,&r,0,2,4,1);m.regs[2][DCN302_SURFACE_R_BOTTOM]=15;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
+    for(unsigned mode=0;mode<=3;mode++){   /* MPCC passthrough / top only / blending with no bottom layer: all show the plane as is */
         init(&m,&io,&r,0,2,4,1);m.regs[2][DCN302_SURFACE_R_MODE]=mode;CHECK(bind(&m,&io,&r,1,&s)==DCN302_SURFACE_OK);cases++;
     }
     init(&m,&io,&r,0,2,4,1);

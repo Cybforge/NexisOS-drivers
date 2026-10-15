@@ -10,7 +10,7 @@ Es gibt dafür keinen Store-Eintrag.
 | Paket | Hardware | Stand |
 | --- | --- | --- |
 | `bochs` v2 | QEMU „standard VGA“ (`1234:1111`) | fertig, in QEMU getestet (virtuelles Testgerät, kein echter Treiber) |
-| `rx6600` v7 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
+| `rx6600` v8 | AMD RX 6600 / 6650 XT (Navi23, DCN 3.0.2; `1002:73ff`, `1002:73ef`) | **komplette Quelle** (Takte, Fetch, Farbpfad, Timing, PLL, SCDC, HDMI, Audio) mit Rollback; **nur gegen Registermodelle geprüft, nie auf echter Hardware gelaufen** |
 | AMD RDNA2 groß (RX 6700/6800/6900) | Navi21/22 | **nicht implementiert**, kein Paket |
 | AMD Polaris/Vega (RX 580 …) | DCE 11/12, DCN 1 | **nicht implementiert**, kein Paket |
 | AMD RDNA1 (RX 5700 …) | Navi10, DCN 2.0 | **nicht implementiert**, kein Paket |
@@ -123,6 +123,15 @@ Das Paket v1 verlangte für BAR5 mindestens 1 MiB – eine Annahme, die nie an e
 braucht von dieser Aperture nur die unteren 0x5d000 Byte. Paket v2 akzeptiert ≥ 512 KiB. **Ob das die tatsächliche Ursache war,
 ist ungeprüft** – deshalb meldet v2 jede Station des Starts im Kernel-Log (`[GPU] BAR…`, `[GPU:rx6600] probe stopped
 at: …`), sodass der nächste Lauf die Stelle exakt benennt, falls es woanders hängt.
+
+## Siebter Hardwarelauf (2026-10-15) und Paket v8: die echten Ebenen-Register
+
+Der erweiterte Abzug von v7 zeigte die echten Werte: für die aktive Ebene 0 steht `MPCC_BOT_SEL` auf **0** (jeder ungenutzte MPCC i hat
+top = bottom = opp = i; Linux kennt „kein unterer Layer“ als 15), `MPCC_CONTROL` 0xffff0xxx, Viewport 0x04380780 (1920×1080), Crossbar
+0x00e40000, `DCSURF_SURFACE_CONTROL` 0, OPP-Mux 0x4100. Der Host-Test `real_card()` reproduziert mit diesen Werten genau „code 3“.
+Behoben: „kein unterer Layer“ ist `BOT_SEL` = 15 **oder** die eigene MPCC-Nummer (ein anderer MPCC wäre eine zweite Schicht); der
+MPCC-Modus wird nicht mehr geprüft (er sagt nichts darüber, welche Fläche gezeigt wird). Ungeprüft bleibt: das Kachelmuster
+(`SW_MODE`) stand nicht im Foto; alle Schritte nach der Oberflächen-Bindung (Pixeltakt-Messung, SMU, DDC, Moduswechsel).
 
 ## Sechster Hardwarelauf (2026-10-15) und Paket v7: Oberflächen-Prüfung
 

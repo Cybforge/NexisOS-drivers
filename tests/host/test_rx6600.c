@@ -333,6 +333,14 @@ static void real_card_init(model *m,nexis_gpu_services *k){
     o[DCN302_R_H_TOTAL]=0x897;o[DCN302_R_H_BLANK]=2112|(192u<<16);o[DCN302_R_H_SYNC]=44u<<16;
     o[DCN302_R_V_TOTAL]=0x464;o[DCN302_R_V_BLANK]=1121|(41u<<16);o[DCN302_R_V_SYNC]=5u<<16;
     m->period=16667;
+    /* Plane registers of the real card (2026-10-15 dump): every idle MPCC i has top=bottom=opp=i, the active MPCC 0 too (BOT_SEL is its own
+     * id, not 15); OPP mux 0x4100 for OPP 0; viewport 1920x1080; crossbar 0x00e40000; DCSURF control 0; MPCC_CONTROL 0xffff0xxx. */
+    for(unsigned i=0;i<5;i++){
+        m->surface[i][DCN302_SURFACE_R_OUT_MUX]=i?0x4000u|i:0x4100u;
+        m->surface[i][DCN302_SURFACE_R_TOP]=i;m->surface[i][DCN302_SURFACE_R_BOTTOM]=i;m->surface[i][DCN302_SURFACE_R_OPP]=i;
+        m->surface[i][DCN302_SURFACE_R_MODE]=0xffff0000u;
+    }
+    m->surface[0][DCN302_SURFACE_R_VIEW_SIZE]=0x04380780u;m->surface[0][DCN302_SURFACE_R_CROSSBAR]=0x00e40000u;m->surface[0][DCN302_SURFACE_R_CONTROL]=0;
     uint32_t *h=m->surface[0];h[DCN302_SURFACE_R_CONFIG]=8;h[DCN302_SURFACE_R_CLOCK]=0x00f11111;h[DCN302_SURFACE_R_HUBP]=0x000f0002;
     h[DCN302_SURFACE_R_ADDRESS]=h[DCN302_SURFACE_R_INUSE]=0;h[DCN302_SURFACE_R_ADDRESS_HIGH]=h[DCN302_SURFACE_R_INUSE_HIGH]=0x80;
     h[DCN302_SURFACE_R_PITCH]=0x780; /* the GOP programs PITCH = 1920 for its 1920-pixel framebuffer (Linux would write pitch-1) */

@@ -19,7 +19,12 @@ enum dcn302_surface_error dcn302_surface_bind(const dcn302_io *io,const dcn302_r
     unsigned hubp=GET(top,TOP);
     /* Navi23 resources pair HUBP[i] with DPP[i]; MPCC TOP selects this DPP.
      * Reject additional blending layers, self-referential trees and bypass. */
-    if(hubp>=5 || GET(bottom,BOTTOM)!=15 || GET(opp,OPP)!=route->opp || GET(mode,MODE)==0)return DCN302_SURFACE_UNSUPPORTED;   /* any non-bypass MPCC mode: with BOT_SEL = none the plane is shown as is (1 passthrough, 2 top only, 3 blending) */
+    if(hubp>=5 || GET(opp,OPP)!=route->opp)return DCN302_SURFACE_UNSUPPORTED;
+    /* "No bottom layer" is BOT_SEL = 15 in Linux, but on the real RX 6600 every MPCC, the active one included, reads BOT_SEL = its OWN
+     * id (idle MPCC i: top = bottom = opp = i). A different MPCC as bottom would be a second blended layer. The MPCC mode (the
+     * high half of the register holds the global alpha) says nothing about which surface is shown, so it is not examined. */
+    if(GET(bottom,BOTTOM)!=15 && GET(bottom,BOTTOM)!=mpcc)return DCN302_SURFACE_UNSUPPORTED;
+    (void)mode;
     uint32_t regs[DCN302_SURFACE_REGISTER_COUNT]={0};
     for(unsigned r=DCN302_SURFACE_R_CONFIG;r<DCN302_SURFACE_REGISTER_COUNT;r++)if(!rd(io,hubp,(enum dcn302_surface_register)r,&regs[r]))return DCN302_SURFACE_IO;
     uint32_t c=regs[DCN302_SURFACE_R_CONFIG],clock=regs[DCN302_SURFACE_R_CLOCK],ctl=regs[DCN302_SURFACE_R_HUBP];
